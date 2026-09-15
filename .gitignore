@@ -1,0 +1,27 @@
+# 依赖
+node_modules/
+
+# Expo / React Native
+.expo/
+dist/
+web-build/
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+*.orig.*
+
+# 原生构建产物
+android/
+ios/
+
+# 头脑风暴可视化伴侣的临时产物
+.superpowers/
+
+# 杂项
+*.log
+.DS_Store
+Thumbs.db
+.env
+.env.local
