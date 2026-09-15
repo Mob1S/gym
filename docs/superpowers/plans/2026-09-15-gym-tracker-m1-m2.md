@@ -22,6 +22,8 @@
 - **语言**：所有面向用户的文案是简体中文。
 - **测试必须带 `--runInBand`（环境强制）**：本项目所在的执行沙箱禁止子进程用管道捕获输出，而 jest 默认会 `fork` worker 来做 haste-map 扫描，结果是 `Error: spawn EPERM`。**所有 jest 调用都要带 `--runInBand`**（`package.json` 的 `test` 脚本里已经内置）。裸跑 jest 一定会失败，这不是代码问题。
 - **读中文文件要用 read 工具**：在 PowerShell 里用 `Get-Content` 读本项目的中文源码会显示成乱码，那是控制台编码假象，文件本身是好的。判断文件内容一律以 read 工具的结果为准。
+- **跑 Expo 命令必须关遥测**：Expo CLI 会往 `C:\Users\mobis\.expo` 写遥测数据，那是沙箱外的路径，会直接 `EPERM: operation not permitted, mkdir`。**所有 expo 命令前都要设 `EXPO_NO_TELEMETRY=1`**（PowerShell：`$env:EXPO_NO_TELEMETRY = '1'`）。
+- **不要跑 `npx expo export`**：它最后一步要生成 Hermes 字节码，会 `spawn EPERM` 失败。这只是打包工具的沙箱限制，**不代表代码有问题**——Metro 打包本身是通的（可正常打出 1242 个模块的 bundle）。验证代码用 `tsc` + `jest`，验证运行用 `expo start` + 真机。
 
 ---
 
@@ -147,11 +149,18 @@ module.exports = {
 `jest.config.js`：
 
 ```js
+const path = require('path');
+
 module.exports = {
   testEnvironment: 'node',
   testMatch: ['<rootDir>/src/**/*.test.ts'],
   transform: {
-    '^.+\\.tsx?$': ['babel-jest', { configFile: '<rootDir>/babel.config.test.js' }],
+    '^.+\\.tsx?$': [
+      'babel-jest',
+      // 必须用绝对路径。<rootDir> 是 jest 自己的占位符，babel 不认识它，
+      // 写成 '<rootDir>/babel.config.test.js' 会在第一个测试文件出现时才炸。
+      { configFile: path.join(__dirname, 'babel.config.test.js') },
+    ],
   },
 };
 ```
