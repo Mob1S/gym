@@ -85,6 +85,7 @@ export default function SessionScreen() {
     setCurrentIndex,
     completeCurrentSet,
     beginNextSet,
+    endWorkout,
   } = useActiveSession();
 
   const [weight, setWeight] = useState(20);
@@ -281,18 +282,20 @@ export default function SessionScreen() {
   // 误触「结束训练」会让人以为记录丢了，必须二次确认。
   // 无论用户选哪一项，已完成的组早就落盘了，不会丢。
   //
-  // 这里回退到上一屏（训练页）而不是跳总结页：总结页是 Task 10 的路由，
-  // 现在还不存在，`router.replace('/session/summary/...')` 既过不了 typedRoutes
-  // 的 tsc 检查，真机上也会落到空路由。等 Task 10 建出总结页后，这里改成
-  // `router.replace({ pathname: '/session/summary/[id]', params: { id } })`，
-  // 并把 endWorkout(exec) 接在跳转之前。
+  // 确认后先 `endWorkout`（结束进行中的休息、写 finished_at），再进总结页 ——
+  // 总结页要按 finished_at 算时长，不能等用户在总结页点保存时才写。
+  // 必须用对象形式导航：expo-router 的 typedRoutes 只生成
+  // `/session/summary/[id]` 这个字面量，模板字符串过不了 tsc。
   const handleFinish = () => {
     Alert.alert('结束这次训练？', '已经记录的组都会保留。', [
       { text: '继续练', style: 'cancel' },
       {
         text: '结束',
         style: 'destructive',
-        onPress: () => router.back(),
+        onPress: async () => {
+          await endWorkout(exec);
+          router.replace({ pathname: '/session/summary/[id]', params: { id } });
+        },
       },
     ]);
   };
