@@ -13,6 +13,8 @@ import {
   View,
 } from 'react-native';
 
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
 import { DragNumber } from '../../src/components/DragNumber';
 import { Stepper } from '../../src/components/Stepper';
 import type { Exercise, SetEntry } from '../../src/domain/types';
@@ -67,6 +69,11 @@ export default function SessionScreen() {
   const exec = useDatabase();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
+
+  // 这个路由在 app/_layout.tsx 里设了 headerShown: false，导航栏不再替我们
+  // 让出状态栏，所以必须自己把内容压到状态栏下面 —— 否则顶部动作条会和
+  // 信号、时钟、运营商文字叠在一起。
+  const insets = useSafeAreaInsets();
 
   const {
     session,
@@ -240,7 +247,7 @@ export default function SessionScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: insets.top + 12 }]}>
       <View style={styles.chipBarWrapper}>
         <ScrollView
           horizontal
