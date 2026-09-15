@@ -167,6 +167,22 @@ export async function endRest(
 }
 
 /**
+ * 放弃一段休息：清掉 `rest_started_at`，且**不写入 `rest_seconds`**。
+ *
+ * 用于「这段休息跑了太久，显然是忘了按开始下一组」的情况。它和 `endRest`
+ * 的区别是刻意的：那种时长不是真实休息，不该作为数据留下来 —— 休息建议
+ * 规则要算平均休息时长，一条 8 小时的记录足以把平均值彻底带偏。
+ */
+export async function cancelRest(
+  exec: SqlExecutor,
+  setId: string,
+): Promise<void> {
+  await exec.run('UPDATE set_entry SET rest_started_at = NULL WHERE id = ?', [
+    setId,
+  ]);
+}
+
+/**
  * 取某个动作在**更早的某一次训练**里的完成组，用于在记录界面上显示「上次练了多少」。
  *
  * 只取最近一次有该动作的训练：更早的数据对「这次该加多少」没有参考价值，

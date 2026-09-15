@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import type { SqlExecutor } from '../db/types';
+import { findStaleRest } from '../domain/rest';
 import type { SessionExercise, SetEntry, WorkoutSession } from '../domain/types';
 import { getExercise, listExercises } from '../repositories/exerciseRepo';
 import {
@@ -13,6 +14,7 @@ import {
 } from '../repositories/sessionRepo';
 import {
   addSet,
+  cancelRest,
   completeSet,
   endRest,
   getLastPerformance,
@@ -59,16 +61,32 @@ interface ActiveSessionState {
  *
  * 注意 `listSets` 收的是 `session_exercise.id`，不是 `exercise.id` —— 这两个
  * 都是字符串 id，写错了 tsc 不会报错，但会一组都读不出来。
+ *
+ * 这里还兼任一道闸门：**收拾掉跑过头的休息**。做完一组后如果一直没按
+ * 「开始下一组」（直接关掉 App 走了、或者第二天才打开），`rest_started_at`
+ * 会一直留着。不处理的话有两个后果 —— 重开 App 会被堵在休息页出不来，以及
+ * 这段荒唐的时长会作为 `rest_seconds` 存进库，把休息建议的平均值彻底带偏。
+ *
+ * 放在这里而不是各个入口分别处理，是因为 `resume` / `startNew` / `addExercise`
+ * / `endWorkout` 全都会经过它，一处覆盖全部。
  */
 async function loadExercises(
   exec: SqlExecutor,
   sessionId: string,
 ): Promise<ActiveExercise[]> {
   const sessionExercises = await listSessionExercises(exec, sessionId);
+  const now = Date.now();
   const result: ActiveExercise[] = [];
   for (const se of sessionExercises) {
     const exercise = await getExercise(exec, se.exerciseId);
-    const sets = await listSets(exec, se.id);
+    let sets = await listSets(exec, se.id);
+
+    const stale = findStaleRest(sets, now);
+    if (stale) {
+      await cancelRest(exec, stale.id);
+      sets = await listSets(exec, se.id);
+    }
+
     result.push({
       sessionExercise: se,
       exerciseName: exercise?.name ?? '未知动作',
