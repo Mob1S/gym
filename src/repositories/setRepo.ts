@@ -93,6 +93,29 @@ export async function listSets(
 }
 
 /**
+ * 改写某一组的重量与次数。
+ *
+ * 记录界面在「完成这一组」时会先把用户当前填的数值写进来，再标记完成——
+ * 顺序反过来的话，中途失败就会留下一条「已完成但数值是旧的」的记录。
+ *
+ * 之所以在这里开一个函数，而不是让 store 直接 `exec.run(...)`：全局约束规定
+ * 界面层的数据访问只能经过仓储层，store 也不例外。SQL 一旦散布到 store 里，
+ * 将来加云同步就得同时改两处。
+ */
+export async function updateSetValues(
+  exec: SqlExecutor,
+  setId: string,
+  weight: number,
+  reps: number,
+): Promise<void> {
+  await exec.run('UPDATE set_entry SET weight = ?, reps = ? WHERE id = ?', [
+    weight,
+    reps,
+    setId,
+  ]);
+}
+
+/**
  * 标记一组已完成。**这一步必须立刻落盘**——训练记录的全部价值就在于不丢，
  * 不能等训练结束再统一保存。
  */
