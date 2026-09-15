@@ -29,21 +29,37 @@ const SELECT_COLUMNS = `
   id, name, muscle_group, equipment, is_custom, is_archived, created_at
 `;
 
-const ORDER_BY = `
-  ORDER BY
-    CASE muscle_group
-      WHEN '胸' THEN 1 WHEN '背' THEN 2 WHEN '腿' THEN 3
-      WHEN '肩' THEN 4 WHEN '手臂' THEN 5 WHEN '核心' THEN 6
-      ELSE 7
-    END,
-    name COLLATE NOCASE
-`;
+/** 肌群的展示顺序。不在这个表里的肌群一律排到最后。 */
+const MUSCLE_GROUP_ORDER = ['胸', '背', '腿', '肩', '手臂', '核心'];
+
+function muscleGroupRank(group: string | null): number {
+  const index = MUSCLE_GROUP_ORDER.indexOf(group ?? '');
+  return index === -1 ? MUSCLE_GROUP_ORDER.length : index;
+}
+
+/**
+ * 按肌群、再按动作名排序。
+ *
+ * **名称必须在这里用 localeCompare('zh') 排，不能交给 SQLite。**
+ * SQLite 的 `COLLATE NOCASE` 只做 ASCII 大小写折叠，对中文退化为 UTF-8 码点比较，
+ * 排出来是「保加利亚分腿蹲、前蹲、坐姿提踵、深蹲、硬拉…」这种对人来说毫无规律的顺序。
+ * JS 的 localeCompare('zh') 走 ICU 拼音序，才是中文用户预期的「按字母排」。
+ *
+ * 实测：SQLite 的 `name COLLATE NOCASE` / `name` / `name COLLATE BINARY` 三者结果
+ * 与 JS 默认 `.sort()` 完全一致，与 `localeCompare('zh')` 全部不同。
+ */
+function compareExercises(a: Exercise, b: Exercise): number {
+  const rankDiff =
+    muscleGroupRank(a.muscleGroup) - muscleGroupRank(b.muscleGroup);
+  if (rankDiff !== 0) return rankDiff;
+  return a.name.localeCompare(b.name, 'zh');
+}
 
 export async function listExercises(exec: SqlExecutor): Promise<Exercise[]> {
   const rows = await exec.all<ExerciseRow>(
-    `SELECT ${SELECT_COLUMNS} FROM exercise WHERE is_archived = 0 ${ORDER_BY}`,
+    `SELECT ${SELECT_COLUMNS} FROM exercise WHERE is_archived = 0`,
   );
-  return rows.map(toExercise);
+  return rows.map(toExercise).sort(compareExercises);
 }
 
 export async function getExercise(

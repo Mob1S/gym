@@ -57,11 +57,20 @@ describe('exerciseRepo', () => {
     await seedExercisesIfEmpty(exec);
     const all = await listExercises(exec);
     const legs = all.filter((e) => e.muscleGroup === '腿').map((e) => e.name);
-    // 参照比较器用的是 JS 默认的 code-unit 排序，而不是 localeCompare('zh')：
-    // SQLite 的 COLLATE NOCASE 只做 ASCII 大小写折叠，对中文一律退化为按 UTF-8
-    // 码点比较；JS 的 localeCompare('zh') 走 ICU 拼音排序。两者对「保加利亚分腿蹲 /
-    // 前蹲 / 坐姿提踵 / 深蹲 / …」给出不同顺序，SQLite 侧除非注册自定义 collation
-    // 否则无法复现拼音序。实现里的 ORDER BY 保证的正是「稳定、确定」的码点序。
-    expect(legs).toEqual([...legs].sort());
+
+    // 必须用 localeCompare('zh') 作参照，也就是拼音序。
+    // 这条断言曾经写成 JS 默认的 .sort()（码点序），那是错的：SQLite 的
+    // COLLATE NOCASE 对中文只会退化成 UTF-8 码点比较，排出来对人来说是乱序。
+    // 排序是产品行为，所以修的是实现，不是这条断言。
+    expect(legs).toEqual([...legs].sort((a, b) => a.localeCompare(b, 'zh')));
+  });
+
+  it('肌群之间按 胸→背→腿→肩→手臂→核心 的顺序排列', async () => {
+    const exec = await createMigratedExecutor();
+    await seedExercisesIfEmpty(exec);
+    const groups = (await listExercises(exec))
+      .map((e) => e.muscleGroup)
+      .filter((g, i, arr) => i === 0 || arr[i - 1] !== g);
+    expect(groups).toEqual(['胸', '背', '腿', '肩', '手臂', '核心']);
   });
 });
