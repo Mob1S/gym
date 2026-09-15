@@ -24,7 +24,10 @@ export default function TrainTab() {
     const started = useActiveSession.getState().session;
     if (started) {
       await keepScreenAwake();
-      router.push(`/session/${started.id}`);
+      // 必须用对象形式。expo-router 的 typedRoutes 对动态路由只生成
+      // `/session/[id]` 这个字面量，没有 `/session/${string}` 模板，
+      // 写成模板字符串过不了 tsc。
+      router.push({ pathname: '/session/[id]', params: { id: started.id } });
     }
   }, [exec, router, startNew]);
 
@@ -35,7 +38,9 @@ export default function TrainTab() {
       {session ? (
         <Pressable
           style={styles.primaryButton}
-          onPress={() => router.push(`/session/${session.id}`)}
+          onPress={() =>
+            router.push({ pathname: '/session/[id]', params: { id: session.id } })
+          }
         >
           <Text style={styles.primaryButtonText}>继续上次训练</Text>
         </Pressable>

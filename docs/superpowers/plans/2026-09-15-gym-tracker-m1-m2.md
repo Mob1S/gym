@@ -2136,6 +2136,31 @@ git commit -m "feat(repo): 训练与组的仓储，休息计时基于时间戳�
 
 ### Task 7: 应用状态与训练页（开始 / 恢复训练）
 
+> **⚠️ 本节下方代码块有三处已被实测修正，以本段为准。**
+>
+> **(a) store 里不许写 SQL —— 用 `setRepo.updateSetValues`。**
+> 计划 Step 3 的 `completeCurrentSet` 里直接调了 `exec.run('UPDATE set_entry SET weight = ?, reps = ? WHERE id = ?', ...)`。这违反全局约束（界面/状态层不写 SQL），而且将来加云同步要改两处。仓储层补一个函数：
+> ```ts
+> export async function updateSetValues(
+>   exec: SqlExecutor, setId: string, weight: number, reps: number,
+> ): Promise<void> {
+>   await exec.run('UPDATE set_entry SET weight = ?, reps = ? WHERE id = ?', [
+>     weight, reps, setId,
+>   ]);
+> }
+> ```
+> store 改为 `await updateSetValues(exec, pending.id, weight, reps);`。
+>
+> **(b) 动态路由必须用对象形式导航，不能用模板字符串。**
+> `app.json` 开了 `experiments.typedRoutes`，而 SDK 57 生成的路由联合类型里**没有 `DynamicRoutes`**，只生成了字面量 `` `/session/[id]` ``，没有 `` `/session/${string}` `` 模板。所以计划里的 `router.push(\`/session/${id}\`)` 必然 `TS2345`：
+> ```ts
+> router.push({ pathname: '/session/[id]', params: { id: started.id } });
+> ```
+> **不要用 `as never` 之类的断言消错** —— 那会把真实的路由校验永久丢掉。
+>
+> **(c) `app/session/[id].tsx` 的临时占位。**
+> 这个文件到 Task 8 才正式实现，但在它存在之前，上面的类型问题无法解决，而且真机上点「开始训练」会落到空路由直接崩。Task 7 结束时先放一个最小占位页（显示 session id + 一句「记录界面将在 Task 8 实现」），Task 8 会把整个文件替换掉。
+
 **Files:**
 - Create: `src/repositories/database.tsx`
 - Create: `src/store/activeSession.ts`
@@ -3308,7 +3333,7 @@ npx jest --runInBand
 npx tsc --noEmit
 ```
 
-Expected: 55 个测试全部 PASS；`tsc` 无输出。
+Expected: 58 个测试全部 PASS；`tsc` 无输出。
 
 - [ ] **Step 2: 写验收清单文档**
 
