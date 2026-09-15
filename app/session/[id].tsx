@@ -16,6 +16,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DragNumber } from '../../src/components/DragNumber';
+import { RestTimer } from '../../src/components/RestTimer';
 import { Stepper } from '../../src/components/Stepper';
 import type { Exercise, SetEntry } from '../../src/domain/types';
 import { useDatabase } from '../../src/repositories/database';
@@ -83,6 +84,7 @@ export default function SessionScreen() {
     addExercise,
     setCurrentIndex,
     completeCurrentSet,
+    beginNextSet,
   } = useActiveSession();
 
   const [weight, setWeight] = useState(20);
@@ -104,6 +106,14 @@ export default function SessionScreen() {
   const currentSets = current?.sets ?? [];
   const pending: SetEntry | undefined = useMemo(
     () => currentSets.find((s) => !s.isCompleted),
+    [currentSets],
+  );
+
+  // 休息态：当前动作里存在「已完成、且休息还没结束」的那一组。
+  // `restStartedAt` 由 `startRest` 写下、由 `endRest` 清空，所以这个判定
+  // 是「库里的事实」，不是本屏的临时 state —— 杀掉 App 重进也照样落在休息屏。
+  const restingSet: SetEntry | undefined = useMemo(
+    () => currentSets.find((s) => s.isCompleted && s.restStartedAt !== null),
     [currentSets],
   );
 
@@ -180,6 +190,47 @@ export default function SessionScreen() {
     return (
       <View style={styles.container}>
         <Text style={styles.hint}>这次训练还没有动作</Text>
+      </View>
+    );
+  }
+
+  // 休息态必须放在记录界面之前返回：休息时整屏只该有一个大计时和两个按钮，
+  // 把重量/次数/完成按钮留在屏幕上只会诱导用户「休息时又点一次完成」。
+  if (restingSet && restingSet.restStartedAt !== null) {
+    const startedAt = restingSet.restStartedAt;
+
+    // 「换下一个动作」只有真的还有下一个动作时才切；没有就退化成开始下一组。
+    // 两条路径都先 `beginNextSet` 把当前这段休息结掉（写入 rest_seconds），
+    // 否则计时会一直悬着，这一段休息的时长永远不会落库。
+    const handleSwitchExercise = async () => {
+      try {
+        await beginNextSet(exec);
+      } catch (e) {
+        Alert.alert('没能结束这段休息', e instanceof Error ? e.message : String(e));
+        return;
+      }
+      const hasNext = currentIndex + 1 < exercises.length;
+      if (hasNext) setCurrentIndex(currentIndex + 1);
+    };
+
+    return (
+      // 顶部同样让出状态栏：这个路由是 headerShown: false，没有导航栏帮忙。
+      <View
+        style={[
+          styles.container,
+          { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 20 },
+        ]}
+      >
+        <RestTimer
+          startedAt={startedAt}
+          justCompleted={{ weight: restingSet.weight, reps: restingSet.reps }}
+          onStartNextSet={() => {
+            void beginNextSet(exec);
+          }}
+          onSwitchExercise={() => {
+            void handleSwitchExercise();
+          }}
+        />
       </View>
     );
   }
