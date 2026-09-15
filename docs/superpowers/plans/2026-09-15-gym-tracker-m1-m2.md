@@ -1456,6 +1456,25 @@ git commit -m "feat(repo): 动作库仓储与 52 个预置动作"
 
 ### Task 6: 训练与组的仓储（含崩溃恢复）
 
+> **⚠️ 本节下方代码块有两处已被实测修正，以本段为准。**
+>
+> **(a) JOIN 查询必须用带表前缀的列清单 —— 否则 `ambiguous column name: id`。**
+> 计划里 `getLastPerformance` 用不带前缀的 `SELECT_COLUMNS` 去 JOIN `session_exercise`，而 `set_entry` 和 `session_exercise` **都有 `id` 和 `position`**，SQLite 在 prepare 阶段直接抛错，实测红 2 条。需要单独一份前缀版：
+> ```ts
+> const SELECT_COLUMNS_PREFIXED = `
+>   st.id, st.session_exercise_id, st.position, st.weight, st.reps,
+>   st.is_completed, st.rest_seconds, st.rest_started_at, st.completed_at
+> `;
+> ```
+> `listSets` 不 JOIN，继续用不带前缀的那份。
+>
+> **(b) 所有 `ORDER BY started_at DESC` 都要补 `rowid DESC` 兜底。**
+> `started_at` 是 `Date.now()` 的毫秒值，**同一毫秒内连续建两场训练会完全并列**（实测确实撞车），并列时 SQLite 按扫描顺序返回，即**先插入的那场** —— 语义整个反了。`getLastPerformance` 因此取到了更早的训练（断言 `[95]` 实收 `[80]`）。
+>
+> 涉及三处，全部改成 `ORDER BY ... , rowid DESC`：`getLastPerformance`（`s.rowid`）、`getActiveSession`（`rowid`）、`listSessions`（`rowid`）。
+>
+> **不要用 `sleep(5ms)` 绕开这个问题** —— 那只是把不确定性藏起来。Task 6 额外补了两条**故意不 sleep** 的测试，直接断言「同毫秒建的两场训练，取后插入的那场」，且先 `expect(second.startedAt).toBe(first.startedAt)` 确认撞车真的发生。
+
 **Files:**
 - Create: `src/repositories/sessionRepo.ts`
 - Create: `src/repositories/setRepo.ts`
@@ -1753,7 +1772,7 @@ export async function listSessionExercises(
 npx jest --runInBand src/repositories/sessionRepo.test.ts
 ```
 
-Expected: PASS，9 个测试全绿。
+Expected: PASS，11 个测试全绿。
 
 - [ ] **Step 5: 写失败的 setRepo 测试**
 
@@ -2104,7 +2123,7 @@ npx jest --runInBand
 npx tsc --noEmit
 ```
 
-Expected: 全部 PASS（10 + 11 + 5 + 8 + 9 + 10 = 53 个测试）；`tsc` 无输出。
+Expected: 全部 PASS（10 + 11 + 5 + 8 + 11 + 10 = 55 个测试）；`tsc` 无输出。
 
 - [ ] **Step 10: 提交**
 
@@ -3289,7 +3308,7 @@ npx jest --runInBand
 npx tsc --noEmit
 ```
 
-Expected: 53 个测试全部 PASS；`tsc` 无输出。
+Expected: 55 个测试全部 PASS；`tsc` 无输出。
 
 - [ ] **Step 2: 写验收清单文档**
 

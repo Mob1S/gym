@@ -79,7 +79,7 @@ export async function getActiveSession(
   const row = await exec.first<SessionRow>(
     `SELECT id, name, started_at, finished_at, note FROM session
      WHERE finished_at IS NULL
-     ORDER BY started_at DESC
+     ORDER BY started_at DESC, rowid DESC
      LIMIT 1`,
   );
   return row ? toSession(row) : null;
@@ -103,7 +103,7 @@ export async function listSessions(
   const rows = await exec.all<SessionRow>(
     `SELECT id, name, started_at, finished_at, note FROM session
      WHERE finished_at IS NOT NULL
-     ORDER BY started_at DESC
+     ORDER BY started_at DESC, rowid DESC
      LIMIT ?`,
     [limit],
   );

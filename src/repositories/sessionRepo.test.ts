@@ -91,4 +91,31 @@ describe('sessionRepo', () => {
     }
     expect((await listSessions(exec, 2)).length).toBe(2);
   });
+
+  // 下面两条**故意不加 sleep**。started_at 是毫秒时间戳，同毫秒内连续建两场训练
+  // 会让 ORDER BY started_at DESC 出现并列，SQLite 便按扫描顺序返回，结果不确定。
+  // 加 rowid DESC 作为并列时的兜底（rowid 即插入顺序），语义才是确定的。
+
+  it('同毫秒建的两场训练，getActiveSession 取后插入的那场', async () => {
+    const exec = await createMigratedExecutor();
+    const first = await createSession(exec, '先建的');
+    const second = await createSession(exec, '后建的');
+    expect(second.startedAt).toBe(first.startedAt); // 确认真的撞在同一毫秒
+
+    const active = await getActiveSession(exec);
+    expect(active?.id).toBe(second.id);
+  });
+
+  it('同毫秒建的两场训练，列表按后插入优先排列', async () => {
+    const exec = await createMigratedExecutor();
+    const first = await createSession(exec, '先建的');
+    const second = await createSession(exec, '后建的');
+    expect(second.startedAt).toBe(first.startedAt);
+
+    await finishSession(exec, first.id, Date.now());
+    await finishSession(exec, second.id, Date.now());
+
+    const list = await listSessions(exec, 10);
+    expect(list.map((s) => s.name)).toEqual(['后建的', '先建的']);
+  });
 });
