@@ -24,6 +24,7 @@
 - **读中文文件要用 read 工具**：在 PowerShell 里用 `Get-Content` 读本项目的中文源码会显示成乱码，那是控制台编码假象，文件本身是好的。判断文件内容一律以 read 工具的结果为准。
 - **跑 Expo 命令必须关遥测**：Expo CLI 会往 `C:\Users\mobis\.expo` 写遥测数据，那是沙箱外的路径，会直接 `EPERM: operation not permitted, mkdir`。**所有 expo 命令前都要设 `EXPO_NO_TELEMETRY=1`**（PowerShell：`$env:EXPO_NO_TELEMETRY = '1'`）。
 - **不要跑 `npx expo export`**：它最后一步要生成 Hermes 字节码，会 `spawn EPERM` 失败。这只是打包工具的沙箱限制，**不代表代码有问题**——Metro 打包本身是通的（可正常打出 1242 个模块的 bundle）。验证代码用 `tsc` + `jest`，验证运行用 `expo start` + 真机。
+- **`SqlExecutor.run()` 在多语句 SQL 上必须走 exec 语义**：SQLite 的 `prepare()` 面对 `CREATE TABLE a(...); CREATE TABLE b(...);` 这样的多语句字符串**不会报错，只会静默执行第一条**，后面的表和索引全部丢失。实测：`node:sqlite` 的 `prepare().run()` 只建出 `a`，`exec()` 才建出 `a` 和 `b`；`expo-sqlite` 的 `runAsync` 底层同样是 `prepareAsync`，有完全一样的问题。**因此两个适配器在 `params.length === 0` 时都必须改走 `exec` / `execAsync`。** 这是本项目最容易静默炸掉数据层的一个坑。
 
 ---
 
@@ -755,6 +756,43 @@ git commit -m "feat(domain): 组间休息提示规则"
 ---
 
 ### Task 4: 数据库 schema、迁移与执行器
+
+> **⚠️ 本节下方 Step 3 / Step 8 / Step 2 的代码块已被实测修正，以本段为准。**
+>
+> 照抄下面的原始代码**跑不绿**。Task 4 执行时发现三处必须改，根因均已实测确认：
+>
+> **(a) `nodeExecutor.run`：无参数时改走 `db.exec(sql)`。**
+> `node:sqlite` 的 `prepare()` 对多语句字符串不报错、只执行第一条，`CREATE_TABLES_SQL` 因此只建出 `exercise`，其余三张表和三个索引全丢。
+> ```ts
+> async run(sql, params = []) {
+>   if (params.length === 0) { db.exec(sql); return; }
+>   db.prepare(sql).run(...(params as never[]));
+> },
+> ```
+>
+> **(b) `expoSqlite.run`：无参数时改走 `db.execAsync(sql)`。** 这是同一个 bug 的生产版，**后果比测试版严重得多**：`expo-sqlite` 的 `runAsync`（`node_modules/expo-sqlite/build/SQLiteDatabase.js` 第 315 行）底层调用 `prepareAsync`（第 316 行），同样只执行第一条语句。不改的话，单元测试里验证通过的 SQL 在真机上根本建不全表 —— 恰恰是「两边跑同一份 SQL」这个设计要防的事。**注意这个分支 jest 覆盖不到，必须真机验证。**
+> ```ts
+> async run(sql, params = []) {
+>   if (params.length === 0) { await db.execAsync(sql); return; }
+>   await db.runAsync(sql, params as never[]);
+> },
+> ```
+>
+> **(c) `getSchemaVersion`：先查 `sqlite_master` 里有没有 `app_meta`，没有就返回 0。** 否则全新库上直接查会抛 `no such table: app_meta`，而本节测试第 4 条要求此时返回 0。
+> ```ts
+> export async function getSchemaVersion(exec: SqlExecutor): Promise<number> {
+>   const table = await exec.first<{ name: string }>(
+>     "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'app_meta'",
+>   );
+>   if (!table) return 0;
+>   const row = await exec.first<{ value: string }>(
+>     "SELECT value FROM app_meta WHERE key = 'schema_version'",
+>   );
+>   return row ? Number(row.value) : 0;
+> }
+> ```
+>
+> 未改动：所有 SQL 字符串与注释、`MIGRATIONS` 结构、`ON CONFLICT(key) DO UPDATE SET value = excluded.value`、`PRAGMA foreign_keys = ON`（外键测试依赖它）。
 
 **Files:**
 - Create: `src/db/types.ts`
