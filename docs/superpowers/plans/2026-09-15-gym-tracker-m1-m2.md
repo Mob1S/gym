@@ -88,12 +88,22 @@ tsconfig.json
 
 仓库根目录已有 `docs/` 和 `.git`，`create-expo-app` 不接受非空目录，所以先建到子目录再搬上来。
 
+**⚠️ 必须排除 `.git`**：`create-expo-app` 会在新目录里自己 `git init`。如果把它一起搬过来，就会用脚手架的空仓库覆盖掉本仓库，历史提交全部丢失。
+
 ```powershell
 npx create-expo-app@latest expo-scaffold --template default --no-install
-Get-ChildItem expo-scaffold -Force | Where-Object { $_.Name -ne '.gitignore' } | Move-Item -Destination . -Force
+Get-ChildItem expo-scaffold -Force | Where-Object { $_.Name -notin @('.git', '.gitignore') } | Move-Item -Destination . -Force
 Remove-Item -Recurse -Force expo-scaffold
 npm install
 ```
+
+搬完后**先确认历史还在**，再往下走：
+
+```powershell
+git log --oneline
+```
+
+Expected: 至少能看到 4 条提交（设计文档、两次规格修订、实施计划）。若这里报 `not a git repository` 或历史为空，**立刻停下并报告**，不要继续。
 
 - [ ] **Step 2: 安装依赖**
 
