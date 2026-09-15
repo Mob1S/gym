@@ -20,6 +20,8 @@
 - **休息提示只做展示**：只在训练总结页出现，不阻断操作，不做到点提醒，不做跨训练推断。**必须把次数数组原样显示**，必须标注「粗略参考」。
 - **单位**：v1 只用 kg。数据库中所有重量都是 kg 的数值，不做单位字段。
 - **语言**：所有面向用户的文案是简体中文。
+- **测试必须带 `--runInBand`（环境强制）**：本项目所在的执行沙箱禁止子进程用管道捕获输出，而 jest 默认会 `fork` worker 来做 haste-map 扫描，结果是 `Error: spawn EPERM`。**所有 jest 调用都要带 `--runInBand`**（`package.json` 的 `test` 脚本里已经内置）。裸跑 jest 一定会失败，这不是代码问题。
+- **读中文文件要用 read 工具**：在 PowerShell 里用 `Get-Content` 读本项目的中文源码会显示成乱码，那是控制台编码假象，文件本身是好的。判断文件内容一律以 read 工具的结果为准。
 
 ---
 
@@ -82,7 +84,7 @@ tsconfig.json
 
 **Interfaces:**
 - Consumes: 无
-- Produces: 可运行的四标签 App；`@/*` 路径别名指向 `src/*`；`npx jest` 可运行
+- Produces: 可运行的四标签 App；`@/*` 路径别名指向 `src/*`；`npx jest --runInBand` 可运行
 
 - [ ] **Step 1: 生成 Expo 脚手架**
 
@@ -283,7 +285,7 @@ web-build/
 
 ```powershell
 npx tsc --noEmit
-npx jest
+npx jest --runInBand
 ```
 
 Expected: `tsc` 无输出（无错误）；`jest` 输出 `No tests found`，退出码 1。这是正常的——测试要到 Task 2 才存在。
@@ -446,7 +448,7 @@ describe('estimateOneRepMax', () => {
 - [ ] **Step 3: 运行测试，确认失败**
 
 ```powershell
-npx jest src/domain/metrics.test.ts
+npx jest --runInBand src/domain/metrics.test.ts
 ```
 
 Expected: FAIL —— 找不到模块 `./metrics`。
@@ -498,7 +500,7 @@ export function estimateOneRepMax(weight: number, reps: number): number | null {
 - [ ] **Step 5: 运行测试，确认通过**
 
 ```powershell
-npx jest src/domain/metrics.test.ts
+npx jest --runInBand src/domain/metrics.test.ts
 ```
 
 Expected: PASS，10 个测试全绿。
@@ -609,7 +611,7 @@ describe('buildRestFeedback', () => {
 - [ ] **Step 2: 运行测试，确认失败**
 
 ```powershell
-npx jest src/domain/restAdvice.test.ts
+npx jest --runInBand src/domain/restAdvice.test.ts
 ```
 
 Expected: FAIL —— 找不到模块 `./restAdvice`。
@@ -729,7 +731,7 @@ export function buildRestFeedback(
 - [ ] **Step 4: 运行测试，确认通过**
 
 ```powershell
-npx jest src/domain/restAdvice.test.ts
+npx jest --runInBand src/domain/restAdvice.test.ts
 ```
 
 Expected: PASS，11 个测试全绿。
@@ -1005,7 +1007,7 @@ describe('migrate', () => {
 - [ ] **Step 5: 运行测试，确认失败**
 
 ```powershell
-npx jest src/db/migrations.test.ts
+npx jest --runInBand src/db/migrations.test.ts
 ```
 
 Expected: FAIL —— 找不到模块 `./migrations`。
@@ -1015,7 +1017,7 @@ Expected: FAIL —— 找不到模块 `./migrations`。
 创建好 Step 2、Step 3 的文件后：
 
 ```powershell
-npx jest src/db/migrations.test.ts
+npx jest --runInBand src/db/migrations.test.ts
 ```
 
 Expected: PASS，5 个测试全绿。
@@ -1236,7 +1238,7 @@ describe('exerciseRepo', () => {
 - [ ] **Step 3: 运行测试，确认失败**
 
 ```powershell
-npx jest src/repositories/exerciseRepo.test.ts
+npx jest --runInBand src/repositories/exerciseRepo.test.ts
 ```
 
 Expected: FAIL —— 找不到模块 `./exerciseRepo`。
@@ -1361,7 +1363,7 @@ export async function seedExercisesIfEmpty(exec: SqlExecutor): Promise<void> {
 - [ ] **Step 5: 运行测试，确认通过**
 
 ```powershell
-npx jest src/repositories/exerciseRepo.test.ts
+npx jest --runInBand src/repositories/exerciseRepo.test.ts
 ```
 
 Expected: PASS，7 个测试全绿。
@@ -1504,7 +1506,7 @@ describe('sessionRepo', () => {
 - [ ] **Step 2: 运行测试，确认失败**
 
 ```powershell
-npx jest src/repositories/sessionRepo.test.ts
+npx jest --runInBand src/repositories/sessionRepo.test.ts
 ```
 
 Expected: FAIL —— 找不到模块 `./sessionRepo`。
@@ -1671,7 +1673,7 @@ export async function listSessionExercises(
 - [ ] **Step 4: 运行 sessionRepo 测试，确认通过**
 
 ```powershell
-npx jest src/repositories/sessionRepo.test.ts
+npx jest --runInBand src/repositories/sessionRepo.test.ts
 ```
 
 Expected: PASS，9 个测试全绿。
@@ -1827,7 +1829,7 @@ describe('setRepo', () => {
 - [ ] **Step 6: 运行测试，确认失败**
 
 ```powershell
-npx jest src/repositories/setRepo.test.ts
+npx jest --runInBand src/repositories/setRepo.test.ts
 ```
 
 Expected: FAIL —— 找不到模块 `./setRepo`。
@@ -2013,7 +2015,7 @@ export async function getLastPerformance(
 - [ ] **Step 8: 运行测试，确认通过**
 
 ```powershell
-npx jest src/repositories/setRepo.test.ts
+npx jest --runInBand src/repositories/setRepo.test.ts
 ```
 
 Expected: PASS，10 个测试全绿。
@@ -2021,7 +2023,7 @@ Expected: PASS，10 个测试全绿。
 - [ ] **Step 9: 跑全部测试与类型检查**
 
 ```powershell
-npx jest
+npx jest --runInBand
 npx tsc --noEmit
 ```
 
@@ -3206,7 +3208,7 @@ git commit -m "feat: 训练总结页，展示次数数组与粗略休息回顾"
 - [ ] **Step 1: 跑完整测试与类型检查**
 
 ```powershell
-npx jest
+npx jest --runInBand
 npx tsc --noEmit
 ```
 

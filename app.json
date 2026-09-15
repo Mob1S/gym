@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "expo-scaffold",
-    "slug": "expo-scaffold",
+    "name": "健身记录",
+    "slug": "gym-tracker",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "exposcaffold",
+    "scheme": "gymtracker",
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon"
