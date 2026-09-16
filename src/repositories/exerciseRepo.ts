@@ -3,7 +3,12 @@ import type { Exercise } from '../domain/types';
 import { newId } from '../lib/id';
 import { SEED_EXERCISES } from './seed';
 
-interface ExerciseRow {
+/**
+ * 行 → 实体的映射。**导出给 `backupRepo` 复用**：备份导出的行映射与仓储读数据的
+ * 行映射必须是同一份，复制一份迟早会漂移，而漂移的表现是「导出的文件字段对不上」，
+ * 极难排查。
+ */
+export interface ExerciseRow {
   id: string;
   name: string;
   muscle_group: string | null;
@@ -13,7 +18,7 @@ interface ExerciseRow {
   created_at: number;
 }
 
-function toExercise(row: ExerciseRow): Exercise {
+export function toExercise(row: ExerciseRow): Exercise {
   return {
     id: row.id,
     name: row.name,
@@ -25,7 +30,8 @@ function toExercise(row: ExerciseRow): Exercise {
   };
 }
 
-const SELECT_COLUMNS = `
+/** 同样导出给 `backupRepo` 复用，保证 SELECT 的列与上面的映射永远对得上 */
+export const SELECT_COLUMNS = `
   id, name, muscle_group, equipment, is_custom, is_archived, created_at
 `;
 

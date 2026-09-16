@@ -2,7 +2,12 @@ import type { SqlExecutor } from '../db/types';
 import type { SetEntry } from '../domain/types';
 import { newId } from '../lib/id';
 
-interface SetRow {
+/**
+ * 行 → 实体的映射。**导出给 `backupRepo` 复用**：备份导出的行映射与仓储读数据的
+ * 行映射必须是同一份，复制一份迟早会漂移，而漂移的表现是「导出的文件字段对不上」，
+ * 极难排查。
+ */
+export interface SetRow {
   id: string;
   session_exercise_id: string;
   position: number;
@@ -14,7 +19,7 @@ interface SetRow {
   completed_at: number | null;
 }
 
-function toSetEntry(row: SetRow): SetEntry {
+export function toSetEntry(row: SetRow): SetEntry {
   return {
     id: row.id,
     sessionExerciseId: row.session_exercise_id,
@@ -28,7 +33,8 @@ function toSetEntry(row: SetRow): SetEntry {
   };
 }
 
-const SELECT_COLUMNS = `
+/** 同样导出给 `backupRepo` 复用，保证 SELECT 的列与上面的映射永远对得上 */
+export const SELECT_COLUMNS = `
   id, session_exercise_id, position, weight, reps,
   is_completed, rest_seconds, rest_started_at, completed_at
 `;

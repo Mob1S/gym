@@ -2,7 +2,12 @@ import type { SqlExecutor } from '../db/types';
 import type { SessionExercise, WorkoutSession } from '../domain/types';
 import { newId } from '../lib/id';
 
-interface SessionRow {
+/**
+ * 行 → 实体的映射与列清单。**导出给 `backupRepo` 复用**：备份导出的行映射与仓储
+ * 读数据的行映射必须是同一份，复制一份迟早会漂移，而漂移的表现是「导出的文件
+ * 字段对不上」，极难排查。
+ */
+export interface SessionRow {
   id: string;
   name: string | null;
   started_at: number;
@@ -10,7 +15,7 @@ interface SessionRow {
   note: string | null;
 }
 
-interface SessionExerciseRow {
+export interface SessionExerciseRow {
   id: string;
   session_id: string;
   exercise_id: string;
@@ -18,7 +23,7 @@ interface SessionExerciseRow {
   note: string | null;
 }
 
-function toSession(row: SessionRow): WorkoutSession {
+export function toSession(row: SessionRow): WorkoutSession {
   return {
     id: row.id,
     name: row.name,
@@ -28,7 +33,7 @@ function toSession(row: SessionRow): WorkoutSession {
   };
 }
 
-function toSessionExercise(row: SessionExerciseRow): SessionExercise {
+export function toSessionExercise(row: SessionExerciseRow): SessionExercise {
   return {
     id: row.id,
     sessionId: row.session_id,
@@ -37,6 +42,12 @@ function toSessionExercise(row: SessionExerciseRow): SessionExercise {
     note: row.note,
   };
 }
+
+/** 本文件内的查询与 `backupRepo` 共用，保证 SELECT 的列与映射永远对得上 */
+export const SESSION_COLUMNS = 'id, name, started_at, finished_at, note';
+
+export const SESSION_EXERCISE_COLUMNS =
+  'id, session_id, exercise_id, position, note';
 
 export async function createSession(
   exec: SqlExecutor,
@@ -61,7 +72,7 @@ export async function getSession(
   id: string,
 ): Promise<WorkoutSession | null> {
   const row = await exec.first<SessionRow>(
-    'SELECT id, name, started_at, finished_at, note FROM session WHERE id = ?',
+    `SELECT ${SESSION_COLUMNS} FROM session WHERE id = ?`,
     [id],
   );
   return row ? toSession(row) : null;
@@ -77,7 +88,7 @@ export async function getActiveSession(
   exec: SqlExecutor,
 ): Promise<WorkoutSession | null> {
   const row = await exec.first<SessionRow>(
-    `SELECT id, name, started_at, finished_at, note FROM session
+    `SELECT ${SESSION_COLUMNS} FROM session
      WHERE finished_at IS NULL
      ORDER BY started_at DESC, rowid DESC
      LIMIT 1`,
@@ -101,7 +112,7 @@ export async function listSessions(
   limit: number,
 ): Promise<WorkoutSession[]> {
   const rows = await exec.all<SessionRow>(
-    `SELECT id, name, started_at, finished_at, note FROM session
+    `SELECT ${SESSION_COLUMNS} FROM session
      WHERE finished_at IS NOT NULL
      ORDER BY started_at DESC, rowid DESC
      LIMIT ?`,
@@ -143,7 +154,7 @@ export async function listSessionExercises(
   sessionId: string,
 ): Promise<SessionExercise[]> {
   const rows = await exec.all<SessionExerciseRow>(
-    `SELECT id, session_id, exercise_id, position, note FROM session_exercise
+    `SELECT ${SESSION_EXERCISE_COLUMNS} FROM session_exercise
      WHERE session_id = ?
      ORDER BY position ASC`,
     [sessionId],
