@@ -1,0 +1,452 @@
+import type {
+  Exercise,
+  SessionExercise,
+  SetEntry,
+  WorkoutSession,
+} from './types';
+
+/**
+ * 备份文件的构造与校验。
+ *
+ * 这是纯逻辑：不碰数据库、不碰文件系统、不读时钟。导入的语义是**整库替换**，
+ * 所以校验不过就必须一个字节都不写 —— 本模块的所有失败都表现为
+ * `{ ok: false, reason }`，**绝不抛异常**（`JSON.parse` 那一步在调用方）。
+ *
+ * `reason` 必须让人能自救：说清是哪个数组、第几条、哪个字段、收到了什么。
+ */
+
+/** 固定字符串，用来识别「这是不是本 App 导出的文件」 */
+export const BACKUP_FORMAT = 'gym-tracker-backup';
+
+/** 备份格式版本。读到比它大的版本必须拒绝，不能静默降级读取 */
+export const BACKUP_VERSION = 1;
+
+export interface BackupData {
+  exercises: Exercise[];
+  sessions: WorkoutSession[];
+  sessionExercises: SessionExercise[];
+  sets: SetEntry[];
+}
+
+export interface BackupFile {
+  format: string;
+  version: number;
+  schemaVersion: number;
+  exportedAt: number;
+  data: BackupData;
+}
+
+export type BackupValidation =
+  | { ok: true; backup: BackupFile }
+  | { ok: false; reason: string };
+
+/**
+ * 组装一份备份文件。只做组装，不做校验 —— 数据来自本机仓储，是可信来源；
+ * 校验的门在 `validateBackup`（读别人的文件时才需要）。
+ */
+export function buildBackup(
+  data: BackupData,
+  schemaVersion: number,
+  exportedAt: number,
+): BackupFile {
+  return {
+    format: BACKUP_FORMAT,
+    version: BACKUP_VERSION,
+    schemaVersion,
+    exportedAt,
+    data,
+  };
+}
+
+type FieldResult<T> = { ok: true; value: T } | { ok: false; reason: string };
+
+function fail(reason: string): BackupValidation {
+  return { ok: false, reason };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** 把收到的值描述成一小段人能看懂的文字，放进 reason 里 */
+function describe(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  if (Array.isArray(value)) return `数组(${value.length} 项)`;
+  if (typeof value === 'string') return `字符串 ${JSON.stringify(value)}`;
+  if (typeof value === 'number') return `数字 ${String(value)}`;
+  if (typeof value === 'object') return '对象';
+  return `${typeof value} ${String(value)}`;
+}
+
+function takeString(
+  source: Record<string, unknown>,
+  key: string,
+  label: string,
+): FieldResult<string> {
+  const value = source[key];
+  if (typeof value !== 'string' || value.length === 0) {
+    return { ok: false, reason: `${label} 必须是非空字符串（收到 ${describe(value)}）` };
+  }
+  return { ok: true, value };
+}
+
+function takeNullableString(
+  source: Record<string, unknown>,
+  key: string,
+  label: string,
+): FieldResult<string | null> {
+  const value = source[key];
+  if (value === null) return { ok: true, value: null };
+  if (typeof value !== 'string') {
+    return { ok: false, reason: `${label} 必须是字符串或 null（收到 ${describe(value)}）` };
+  }
+  return { ok: true, value };
+}
+
+function takeBoolean(
+  source: Record<string, unknown>,
+  key: string,
+  label: string,
+): FieldResult<boolean> {
+  const value = source[key];
+  if (typeof value !== 'boolean') {
+    return { ok: false, reason: `${label} 必须是布尔值（收到 ${describe(value)}）` };
+  }
+  return { ok: true, value };
+}
+
+/** 有限数字：NaN / Infinity / 字符串统统不接受 */
+function takeFiniteNumber(
+  source: Record<string, unknown>,
+  key: string,
+  label: string,
+): FieldResult<number> {
+  const value = source[key];
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return { ok: false, reason: `${label} 必须是有限数字（收到 ${describe(value)}）` };
+  }
+  return { ok: true, value };
+}
+
+function takeNullableFiniteNumber(
+  source: Record<string, unknown>,
+  key: string,
+  label: string,
+): FieldResult<number | null> {
+  const value = source[key];
+  if (value === null) return { ok: true, value: null };
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return {
+      ok: false,
+      reason: `${label} 必须是有限数字或 null（收到 ${describe(value)}）`,
+    };
+  }
+  return { ok: true, value };
+}
+
+function takeInteger(
+  source: Record<string, unknown>,
+  key: string,
+  label: string,
+): FieldResult<number> {
+  const value = source[key];
+  if (typeof value !== 'number' || !Number.isInteger(value)) {
+    return { ok: false, reason: `${label} 必须是整数（收到 ${describe(value)}）` };
+  }
+  return { ok: true, value };
+}
+
+/**
+ * 把一条原始记录规范化成具体实体：字段逐个对着 `domain/types.ts` 检查，
+ * 只保留格式定义里的字段（多余的字段一律丢掉，不让脏数据透传到数据库）。
+ * 字段顺序也与 `types.ts` 保持一致。
+ */
+function normalizeExercise(raw: unknown, index: number): FieldResult<Exercise> {
+  const label = `data.exercises 第 ${index + 1} 条`;
+  if (!isPlainObject(raw)) {
+    return { ok: false, reason: `${label} 必须是对象（收到 ${describe(raw)}）` };
+  }
+
+  const id = takeString(raw, 'id', `${label} 的 id`);
+  if (!id.ok) return id;
+  const name = takeString(raw, 'name', `${label} 的 name`);
+  if (!name.ok) return name;
+  const muscleGroup = takeNullableString(raw, 'muscleGroup', `${label} 的 muscleGroup`);
+  if (!muscleGroup.ok) return muscleGroup;
+  const equipment = takeNullableString(raw, 'equipment', `${label} 的 equipment`);
+  if (!equipment.ok) return equipment;
+  const isCustom = takeBoolean(raw, 'isCustom', `${label} 的 isCustom`);
+  if (!isCustom.ok) return isCustom;
+  const isArchived = takeBoolean(raw, 'isArchived', `${label} 的 isArchived`);
+  if (!isArchived.ok) return isArchived;
+  const createdAt = takeFiniteNumber(raw, 'createdAt', `${label} 的 createdAt`);
+  if (!createdAt.ok) return createdAt;
+
+  return {
+    ok: true,
+    value: {
+      id: id.value,
+      name: name.value,
+      muscleGroup: muscleGroup.value,
+      equipment: equipment.value,
+      isCustom: isCustom.value,
+      isArchived: isArchived.value,
+      createdAt: createdAt.value,
+    },
+  };
+}
+
+function normalizeSession(raw: unknown, index: number): FieldResult<WorkoutSession> {
+  const label = `data.sessions 第 ${index + 1} 条`;
+  if (!isPlainObject(raw)) {
+    return { ok: false, reason: `${label} 必须是对象（收到 ${describe(raw)}）` };
+  }
+
+  const id = takeString(raw, 'id', `${label} 的 id`);
+  if (!id.ok) return id;
+  const name = takeNullableString(raw, 'name', `${label} 的 name`);
+  if (!name.ok) return name;
+  const startedAt = takeFiniteNumber(raw, 'startedAt', `${label} 的 startedAt`);
+  if (!startedAt.ok) return startedAt;
+  const finishedAt = takeNullableFiniteNumber(raw, 'finishedAt', `${label} 的 finishedAt`);
+  if (!finishedAt.ok) return finishedAt;
+  const note = takeNullableString(raw, 'note', `${label} 的 note`);
+  if (!note.ok) return note;
+
+  return {
+    ok: true,
+    value: {
+      id: id.value,
+      name: name.value,
+      startedAt: startedAt.value,
+      finishedAt: finishedAt.value,
+      note: note.value,
+    },
+  };
+}
+
+function normalizeSessionExercise(
+  raw: unknown,
+  index: number,
+): FieldResult<SessionExercise> {
+  const label = `data.sessionExercises 第 ${index + 1} 条`;
+  if (!isPlainObject(raw)) {
+    return { ok: false, reason: `${label} 必须是对象（收到 ${describe(raw)}）` };
+  }
+
+  const id = takeString(raw, 'id', `${label} 的 id`);
+  if (!id.ok) return id;
+  const sessionId = takeString(raw, 'sessionId', `${label} 的 sessionId`);
+  if (!sessionId.ok) return sessionId;
+  const exerciseId = takeString(raw, 'exerciseId', `${label} 的 exerciseId`);
+  if (!exerciseId.ok) return exerciseId;
+  const position = takeInteger(raw, 'position', `${label} 的 position`);
+  if (!position.ok) return position;
+  const note = takeNullableString(raw, 'note', `${label} 的 note`);
+  if (!note.ok) return note;
+
+  return {
+    ok: true,
+    value: {
+      id: id.value,
+      sessionId: sessionId.value,
+      exerciseId: exerciseId.value,
+      position: position.value,
+      note: note.value,
+    },
+  };
+}
+
+function normalizeSet(raw: unknown, index: number): FieldResult<SetEntry> {
+  const label = `data.sets 第 ${index + 1} 条`;
+  if (!isPlainObject(raw)) {
+    return { ok: false, reason: `${label} 必须是对象（收到 ${describe(raw)}）` };
+  }
+
+  const id = takeString(raw, 'id', `${label} 的 id`);
+  if (!id.ok) return id;
+  const sessionExerciseId = takeString(
+    raw,
+    'sessionExerciseId',
+    `${label} 的 sessionExerciseId`,
+  );
+  if (!sessionExerciseId.ok) return sessionExerciseId;
+  const position = takeInteger(raw, 'position', `${label} 的 position`);
+  if (!position.ok) return position;
+  const weight = takeFiniteNumber(raw, 'weight', `${label} 的 weight`);
+  if (!weight.ok) return weight;
+  const reps = takeInteger(raw, 'reps', `${label} 的 reps`);
+  if (!reps.ok) return reps;
+  const isCompleted = takeBoolean(raw, 'isCompleted', `${label} 的 isCompleted`);
+  if (!isCompleted.ok) return isCompleted;
+  const restSeconds = takeNullableFiniteNumber(
+    raw,
+    'restSeconds',
+    `${label} 的 restSeconds`,
+  );
+  if (!restSeconds.ok) return restSeconds;
+  const restStartedAt = takeNullableFiniteNumber(
+    raw,
+    'restStartedAt',
+    `${label} 的 restStartedAt`,
+  );
+  if (!restStartedAt.ok) return restStartedAt;
+  const completedAt = takeNullableFiniteNumber(
+    raw,
+    'completedAt',
+    `${label} 的 completedAt`,
+  );
+  if (!completedAt.ok) return completedAt;
+
+  return {
+    ok: true,
+    value: {
+      id: id.value,
+      sessionExerciseId: sessionExerciseId.value,
+      position: position.value,
+      weight: weight.value,
+      reps: reps.value,
+      isCompleted: isCompleted.value,
+      restSeconds: restSeconds.value,
+      restStartedAt: restStartedAt.value,
+      completedAt: completedAt.value,
+    },
+  };
+}
+
+function normalizeList<T>(
+  data: Record<string, unknown>,
+  key: string,
+  normalize: (raw: unknown, index: number) => FieldResult<T>,
+): FieldResult<T[]> {
+  const raw = data[key];
+  if (!Array.isArray(raw)) {
+    return { ok: false, reason: `data.${key} 必须是数组（收到 ${describe(raw)}）` };
+  }
+  const list: T[] = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const item = normalize(raw[i], i);
+    if (!item.ok) return item;
+    list.push(item.value);
+  }
+  return { ok: true, value: list };
+}
+
+/**
+ * 校验一份「从文件里读出来的」东西。只读不写：不碰数据库，也不改 input。
+ *
+ * 覆盖的九类失败：
+ *   1. 顶层不是对象（含 null / 数组）
+ *   2. format 不精确匹配（用户选错了文件）
+ *   3. version 不是正整数
+ *   4. version 比当前新 —— 拒绝，不能按旧格式降级读取
+ *   5. data 不是对象
+ *   6. 四个数组缺任何一个 / 不是数组
+ *   7. 每条记录的字段类型不对（理由带上第几条的哪个字段）
+ *   8. 引用完整性：孤儿 sessionExercise / 孤儿 set
+ *   9. 通过时返回规范化对象，多余的字段不透传
+ */
+export function validateBackup(input: unknown): BackupValidation {
+  // 1. 顶层形状
+  if (!isPlainObject(input)) {
+    return fail(`备份文件的顶层必须是一个对象（收到 ${describe(input)}）`);
+  }
+
+  // 2. format 必须精确匹配 —— 这是识别「用户选错文件」的关键
+  if (input.format !== BACKUP_FORMAT) {
+    return fail(
+      `format 必须是 "${BACKUP_FORMAT}"，实际收到 ${describe(input.format)} —— 这多半不是本 App 导出的备份文件`,
+    );
+  }
+
+  // 3. version 必须是正整数
+  const version = input.version;
+  if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) {
+    return fail(`version 必须是正整数（收到 ${describe(version)}）`);
+  }
+
+  // 4. 比当前新的版本必须拒绝，绝不能猜着读
+  if (version > BACKUP_VERSION) {
+    return fail(
+      `备份文件来自更新版本的 App（文件 version 为 ${version}，当前只支持到 ${BACKUP_VERSION}）—— 请先升级 App 再导入，不能按旧格式读取`,
+    );
+  }
+
+  const schemaVersion = takeFiniteNumber(input, 'schemaVersion', 'schemaVersion');
+  if (!schemaVersion.ok) return fail(schemaVersion.reason);
+
+  const exportedAt = takeFiniteNumber(input, 'exportedAt', 'exportedAt');
+  if (!exportedAt.ok) return fail(exportedAt.reason);
+
+  // 5. data 必须是对象
+  const data = input.data;
+  if (!isPlainObject(data)) {
+    return fail(`data 必须是对象（收到 ${describe(data)}）`);
+  }
+
+  // 6 + 7. 四个数组齐不齐，以及每条记录的字段类型
+  const exercises = normalizeList(data, 'exercises', normalizeExercise);
+  if (!exercises.ok) return fail(exercises.reason);
+
+  const sessions = normalizeList(data, 'sessions', normalizeSession);
+  if (!sessions.ok) return fail(sessions.reason);
+
+  const sessionExercises = normalizeList(
+    data,
+    'sessionExercises',
+    normalizeSessionExercise,
+  );
+  if (!sessionExercises.ok) return fail(sessionExercises.reason);
+
+  const sets = normalizeList(data, 'sets', normalizeSet);
+  if (!sets.ok) return fail(sets.reason);
+
+  // 8. 引用完整性 —— 漏了就会导入一堆孤儿数据
+  const exerciseIds = new Set(exercises.value.map((exercise) => exercise.id));
+  const sessionIds = new Set(sessions.value.map((session) => session.id));
+  const sessionExerciseIds = new Set(
+    sessionExercises.value.map((sessionExercise) => sessionExercise.id),
+  );
+
+  for (let i = 0; i < sessionExercises.value.length; i += 1) {
+    const sessionExercise = sessionExercises.value[i];
+    const label = `data.sessionExercises 第 ${i + 1} 条`;
+    if (!sessionIds.has(sessionExercise.sessionId)) {
+      return fail(
+        `${label} 的 sessionId ${JSON.stringify(sessionExercise.sessionId)} 在 data.sessions 里找不到对应的训练记录（引用完整性）`,
+      );
+    }
+    if (!exerciseIds.has(sessionExercise.exerciseId)) {
+      return fail(
+        `${label} 的 exerciseId ${JSON.stringify(sessionExercise.exerciseId)} 在 data.exercises 里找不到对应的动作（引用完整性）`,
+      );
+    }
+  }
+
+  for (let i = 0; i < sets.value.length; i += 1) {
+    const set = sets.value[i];
+    if (!sessionExerciseIds.has(set.sessionExerciseId)) {
+      return fail(
+        `data.sets 第 ${i + 1} 条的 sessionExerciseId ${JSON.stringify(set.sessionExerciseId)} 在 data.sessionExercises 里找不到对应的动作记录（引用完整性）`,
+      );
+    }
+  }
+
+  // 9. 返回规范化过的对象，input 里多出来的字段一律不透传
+  return {
+    ok: true,
+    backup: {
+      format: BACKUP_FORMAT,
+      version,
+      schemaVersion: schemaVersion.value,
+      exportedAt: exportedAt.value,
+      data: {
+        exercises: exercises.value,
+        sessions: sessions.value,
+        sessionExercises: sessionExercises.value,
+        sets: sets.value,
+      },
+    },
+  };
+}
