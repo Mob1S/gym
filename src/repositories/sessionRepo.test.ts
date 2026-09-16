@@ -1,4 +1,5 @@
 import { createMigratedExecutor } from '../db/__tests__/nodeExecutor';
+import type { SqlExecutor } from '../db/types';
 import {
   addExerciseToSession,
   createSession,
@@ -92,15 +93,33 @@ describe('sessionRepo', () => {
     expect((await listSessions(exec, 2)).length).toBe(2);
   });
 
-  // 下面两条**故意不加 sleep**。started_at 是毫秒时间戳，同毫秒内连续建两场训练
-  // 会让 ORDER BY started_at DESC 出现并列，SQLite 便按扫描顺序返回，结果不确定。
-  // 加 rowid DESC 作为并列时的兜底（rowid 即插入顺序），语义才是确定的。
+  // 下面两条验的是 `ORDER BY started_at DESC, rowid DESC` 里的 rowid 兜底：
+  // started_at 撞在同一毫秒时，SQLite 会退化成按扫描顺序返回（即先插入的在前），
+  // 语义就反了，必须靠 rowid 才确定。
+
+  // 关键：**不要靠"连续两次 createSession 恰好落在同一毫秒"来制造并列**。
+  // 那是在赌时钟，机器一忙两次调用跨过毫秒边界，断言就随机炸（实测 20 次全量
+  // 里闪 2 次）。这里显式把两行的时间戳改成同一个值，让并列成为确定事件 ——
+  // 这样测的是 SQL 的排序语义本身，而不是运气。
+  const FORCED_TIE = 1_700_000_000_000;
+
+  async function seedTiedSessions(exec: SqlExecutor) {
+    const first = await createSession(exec, '先建的');
+    const second = await createSession(exec, '后建的');
+    await exec.run('UPDATE session SET started_at = ? WHERE id = ?', [
+      FORCED_TIE,
+      first.id,
+    ]);
+    await exec.run('UPDATE session SET started_at = ? WHERE id = ?', [
+      FORCED_TIE,
+      second.id,
+    ]);
+    return { first, second };
+  }
 
   it('同毫秒建的两场训练，getActiveSession 取后插入的那场', async () => {
     const exec = await createMigratedExecutor();
-    const first = await createSession(exec, '先建的');
-    const second = await createSession(exec, '后建的');
-    expect(second.startedAt).toBe(first.startedAt); // 确认真的撞在同一毫秒
+    const { second } = await seedTiedSessions(exec);
 
     const active = await getActiveSession(exec);
     expect(active?.id).toBe(second.id);
@@ -108,9 +127,7 @@ describe('sessionRepo', () => {
 
   it('同毫秒建的两场训练，列表按后插入优先排列', async () => {
     const exec = await createMigratedExecutor();
-    const first = await createSession(exec, '先建的');
-    const second = await createSession(exec, '后建的');
-    expect(second.startedAt).toBe(first.startedAt);
+    const { first, second } = await seedTiedSessions(exec);
 
     await finishSession(exec, first.id, Date.now());
     await finishSession(exec, second.id, Date.now());
