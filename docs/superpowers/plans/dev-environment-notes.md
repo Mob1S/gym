@@ -129,3 +129,70 @@ node --use-system-ca .superpowers\download.cjs `
 > New-NetFirewallRule -DisplayName "Expo Metro 8081" -Direction Inbound -Protocol TCP -LocalPort 8081 -Action Allow -Profile Any
 > Remove-NetFirewallRule -DisplayName "Expo Metro 8081"
 > ```
+
+---
+
+## 五、出 APK：为什么最终走的是 EAS 云构建
+
+**结论：本地构建在这台机器上走不通，不是因为沙箱，是因为网络的下载量上限。**
+
+### 被排除的路径
+
+| 路径 | 失败原因 |
+|---|---|
+| 局域网直连 | 防火墙 Domain/Private/Public 三个 profile 全开且无入站放行规则；换网段、换 WiFi 都没用 |
+| `expo start --tunnel` | ngrok 是子进程，撞沙箱的 `spawn EPERM` |
+| **本地构建（Gradle）** | **网络下不动 Gradle 发行版（150MB）和 Maven 依赖（1-2GB）**。gradle.org 与它的 GitHub 镜像全部 `ECONNRESET`／挂起。**换成用户自己的终端也一样**，因为卡点是网络不是权限 |
+
+### 关键认知
+
+> 这个网络**能下 1MB，下不动 2GB**。
+> 判断一条路能不能走，看的是"下载量"，不是"沙箱 vs 你的终端"。
+
+云构建把这个变量消掉了：**只上传 3.1MB 源码**，Gradle 和依赖下载都发生在 Expo 的服务器上。
+
+### EAS 云构建的完整步骤
+
+```powershell
+. .superpowers\build-env.ps1
+$env:EXPO_TOKEN = '<在 expo.dev 生成的 Access Token>'
+Set-Location C:\ccproject\gym
+
+# 一次性：建立项目关联（写入 extra.eas.projectId 到 app.json）
+eas init --non-interactive --force
+
+# 构建（preview profile 产出 APK）
+eas build --platform android --profile preview --non-interactive
+```
+
+实测：**上传 25 秒，云端构建约 20 分钟，产出 APK 105MB。**
+
+### 查构建状态不用 eas-cli
+
+`eas` 每次运行都要 spawn 子进程去读项目配置，每跑一次就得申请一次提权。查状态用 `.superpowers/eas-status.cjs` 直接打 Expo 的 GraphQL API，不需要子进程：
+
+```powershell
+$env:EXPO_TOKEN = '...'
+node --use-system-ca .superpowers\eas-status.cjs fb768c8d-f89c-4041-98a2-27ebd41527a2
+```
+
+### 安装到手机
+
+```powershell
+adb install -r .superpowers\gym-tracker-preview.apk
+adb shell am start -n com.ccproject.gymtracker/.MainActivity
+```
+
+### 沿路踩的坑（都记在 `build-env.ps1` 里）
+
+1. **`spawn EPERM`**：eas-cli 必须 spawn Expo CLI 读配置。沙箱禁止子进程管道 stdio。**按规则原样重试一次并申请 `danger-full-access`** —— 这不是绕路，是文档规定的正确回应。
+2. **`EPERM: mkdir ...\AppData\Roaming\eas-cli-nodejs`**：**`USERPROFILE` 重定向管不到 `APPDATA` 和 `LOCALAPPDATA`**，Windows 工具独立读它们，必须一并重定向。
+3. **`EIDLETIMEOUT registry.npmjs.org`**：看着像网络挂了，其实 npm 默认空闲超时太短。放宽到 600 秒 + 5 次重试后，**30 秒装完**。
+
+---
+
+## 六、这个环境的通用规律（最重要的三条）
+
+1. **报错信息几乎总是指向错误的方向。** `IO exception while downloading manifest` 其实是沙箱不让写 `~/.android`；`Failed to download any source lists` 其实是本地权限问题；`spawn EPERM` 看着像代码错，其实是环境限制。
+2. **凡是"工具想把东西写到用户目录"的地方，都要预先重定向。** 已经踩到五个：`.expo`、`.android`、`.gradle`、`AppData\Roaming\eas-cli-nodejs`、`_npx` 缓存。而且 **`USERPROFILE` 不够，`APPDATA`/`LOCALAPPDATA` 要单独设**。
+3. **网络对"慢连接"不友好，但不是封了。** 凡是超时类失败，先把超时和重试调大再下结论 —— npm 那次差点被误判成"网络挂了"，实际 30 秒就装完了。
