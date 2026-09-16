@@ -3,7 +3,7 @@ import { create } from 'zustand';
 import type { SqlExecutor } from '../db/types';
 import { findStaleRest } from '../domain/rest';
 import type { SessionExercise, SetEntry, WorkoutSession } from '../domain/types';
-import { getExercise, listExercises } from '../repositories/exerciseRepo';
+import { getExercise } from '../repositories/exerciseRepo';
 import {
   addExerciseToSession,
   createSession,
@@ -11,6 +11,7 @@ import {
   getActiveSession,
   getSession,
   listSessionExercises,
+  listSessions,
 } from '../repositories/sessionRepo';
 import {
   addSet,
@@ -40,7 +41,7 @@ interface ActiveSessionState {
 
   /** 载入未结束的训练；没有就返回 false */
   resume: (exec: SqlExecutor) => Promise<boolean>;
-  /** 开一场新训练，并自动加入第一个动作 */
+  /** 开一场新训练，并沿用上一次训练的动作组合（没有历史时为空） */
   startNew: (exec: SqlExecutor, name: string | null) => Promise<void>;
   addExercise: (exec: SqlExecutor, exerciseId: string) => Promise<void>;
   setCurrentIndex: (index: number) => void;
@@ -101,6 +102,37 @@ function findResting(sets: SetEntry[]): SetEntry | undefined {
   return sets.find((s) => s.isCompleted && s.restStartedAt !== null);
 }
 
+/**
+ * 往训练里加一个动作，并预建它的第一组。
+ *
+ * **预建第一组不是可选项。** 记录界面靠「还没完成的那一组」来确定当前该记
+ * 哪一组（`pending`），没有这条待完成的记录，`completeCurrentSet` 会直接
+ * `return`，用户点「完成这组」会毫无反应 —— 一个静默的假死按钮。
+ *
+ * 重量/次数沿用上一次练这个动作的第一组，没有历史（新动作、第一次用）时
+ * 用默认值兜底。
+ *
+ * 抽成私有函数是为了让 `startNew`（复制上一次的动作组合）和 `addExercise`
+ * （用户手动加动作）共用同一条路径。两处各写一遍必然漂移，而漂移的后果
+ * 正是上面那个「按钮没反应」—— 它不会报错，只会让用户以为 App 坏了。
+ */
+async function addExerciseWithFirstSet(
+  exec: SqlExecutor,
+  sessionId: string,
+  exerciseId: string,
+): Promise<SessionExercise> {
+  const se = await addExerciseToSession(exec, sessionId, exerciseId);
+  const last = await getLastPerformance(exec, exerciseId, sessionId);
+  const template = last[0];
+  await addSet(
+    exec,
+    se.id,
+    template?.weight ?? DEFAULT_WEIGHT_KG,
+    template?.reps ?? DEFAULT_REPS,
+  );
+  return se;
+}
+
 export const useActiveSession = create<ActiveSessionState>((set, get) => ({
   loading: false,
   session: null,
@@ -123,23 +155,23 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
   startNew: async (exec, name) => {
     const session = await createSession(exec, name);
 
-    // 默认挑一个还没被用过的动作，省得用户第一屏面对空列表。
-    // 预置库里一定有「深蹲」，但用户可能先建了自定义动作、或者把深蹲归档了，
-    // 所以退回第一个可用动作。
-    const all = await listExercises(exec);
-    const first = all.find((e) => e.name === '深蹲') ?? all[0];
+    // 沿用上一次训练的动作组合，而不是每次都替用户挑一个动作。
+    //
+    // 原来的实现写死了「优先深蹲」，那是为了别让用户第一屏面对空列表偷的懒，
+    // 但它等于假设每个人都从深蹲开始 —— 健身房里绝大多数人按固定套路练
+    // （推日/拉日/腿日），每次从零挑动作是纯粹的浪费。Strong / Hevy 这类
+    // App 都是直接复制上一次的组合。
+    //
+    // `listSessions` 只返回**已结束**的训练，所以这里天然不会复制到一场
+    // 还在进行中的训练。没有历史（第一次用）时就是一场空训练，由界面上的
+    // 「添加动作」引导用户挑第一个动作。
+    const previous = await listSessions(exec, 1);
+    const previousExercises = previous[0]
+      ? await listSessionExercises(exec, previous[0].id)
+      : [];
 
-    if (first) {
-      const sessionExercise = await addExerciseToSession(exec, session.id, first.id);
-      // 上一次练这个动作的重量/次数，作为这一组的默认值
-      const last = await getLastPerformance(exec, first.id, session.id);
-      const template = last[0];
-      await addSet(
-        exec,
-        sessionExercise.id,
-        template?.weight ?? DEFAULT_WEIGHT_KG,
-        template?.reps ?? DEFAULT_REPS,
-      );
+    for (const pe of previousExercises) {
+      await addExerciseWithFirstSet(exec, session.id, pe.exerciseId);
     }
 
     const exercises = await loadExercises(exec, session.id);
@@ -150,15 +182,7 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
     const { session } = get();
     if (!session) return;
 
-    const se = await addExerciseToSession(exec, session.id, exerciseId);
-    const last = await getLastPerformance(exec, exerciseId, session.id);
-    const template = last[0];
-    await addSet(
-      exec,
-      se.id,
-      template?.weight ?? DEFAULT_WEIGHT_KG,
-      template?.reps ?? DEFAULT_REPS,
-    );
+    await addExerciseWithFirstSet(exec, session.id, exerciseId);
 
     const exercises = await loadExercises(exec, session.id);
     set({ exercises, currentIndex: exercises.length - 1 });

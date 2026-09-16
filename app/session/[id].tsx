@@ -179,6 +179,100 @@ export default function SessionScreen() {
     return groupByMuscleGroup(matched);
   }, [allExercises, trimmedQuery]);
 
+  const openPicker = () => {
+    setQuery('');
+    setPickerVisible(true);
+  };
+
+  const closePicker = () => setPickerVisible(false);
+
+  const handlePickExercise = async (exercise: Exercise) => {
+    try {
+      // store 的 addExercise 会自动把 currentIndex 切到新动作，
+      // 并预建第一组（沿用上次练这个动作的重量/次数）。
+      await addExercise(exec, exercise.id);
+    } catch (e) {
+      Alert.alert(
+        '没能加上这个动作',
+        e instanceof Error ? e.message : String(e),
+      );
+      return;
+    }
+    setPickerVisible(false);
+  };
+
+  // 动作选择弹层抽成变量，供两个分支复用：正常的记录界面，以及下面那个
+  // 「这场训练还没有动作」的空状态。
+  //
+  // 空状态必须能打开它：新用户开的第一场训练是空的（没有上一次训练可以复制），
+  // 如果这里只留一句话，屏幕上就没有任何添加入口 —— 用户会彻底卡死在这一屏，
+  // 既记不了组，也不知道该往哪点。复用同一个弹层而不是另写一套，是为了让
+  // 「选动作」永远只有一份实现。
+  const pickerModal = (
+    <Modal
+      visible={pickerVisible}
+      transparent
+      animationType="slide"
+      // Android 的物理返回键 / 手势返回：不接这个回调，返回键会直接退出整屏。
+      onRequestClose={closePicker}
+    >
+      <View style={styles.modalRoot}>
+        <Pressable style={styles.modalBackdrop} onPress={closePicker} />
+        <View style={styles.sheet}>
+          <View style={styles.sheetHeader}>
+            <Text style={styles.sheetTitle}>选择动作</Text>
+            <Pressable
+              style={styles.sheetCancel}
+              onPress={closePicker}
+              accessibilityLabel="取消"
+            >
+              <Text style={styles.sheetCancelText}>取消</Text>
+            </Pressable>
+          </View>
+
+          <TextInput
+            style={styles.search}
+            value={query}
+            onChangeText={setQuery}
+            placeholder="搜索动作名称"
+            placeholderTextColor="#a8adb5"
+            returnKeyType="search"
+            autoCorrect={false}
+          />
+
+          <FlatList
+            data={visibleGroups}
+            keyExtractor={(group) => group.title}
+            keyboardShouldPersistTaps="handled"
+            renderItem={({ item: group }) => (
+              <View>
+                <Text style={styles.groupTitle}>{group.title}</Text>
+                {group.data.map((exercise) => (
+                  <Pressable
+                    key={exercise.id}
+                    style={styles.option}
+                    onPress={() => {
+                      void handlePickExercise(exercise);
+                    }}
+                  >
+                    <Text style={styles.optionText}>{exercise.name}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+            ListEmptyComponent={
+              <Text style={styles.emptyHint}>
+                {allExercises.length === 0
+                  ? '动作库是空的'
+                  : `没有找到「${trimmedQuery}」`}
+              </Text>
+            }
+          />
+        </View>
+      </View>
+    </Modal>
+  );
+
   if (!session || session.id !== id) {
     return (
       <View style={styles.container}>
@@ -187,10 +281,28 @@ export default function SessionScreen() {
     );
   }
 
+  // 空状态：这场训练一个动作都没有（第一次用 App，没有上一次训练可以复制）。
+  // 除了提示文案，必须给一个显眼的添加入口 —— 否则用户在这一屏无路可走。
+  // 和记录界面一样自己让出状态栏：这个路由是 headerShown: false。
   if (!current) {
     return (
-      <View style={styles.container}>
+      <View
+        style={[
+          styles.container,
+          styles.emptyContainer,
+          { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 20 },
+        ]}
+      >
         <Text style={styles.hint}>这次训练还没有动作</Text>
+        <Text style={styles.emptyTip}>添加一个动作就可以开始记录了</Text>
+        <Pressable
+          style={styles.completeButton}
+          onPress={openPicker}
+          accessibilityLabel="添加动作"
+        >
+          <Text style={styles.completeButtonText}>＋　添加动作</Text>
+        </Pressable>
+        {pickerModal}
       </View>
     );
   }
@@ -240,28 +352,6 @@ export default function SessionScreen() {
   const setNumber = completedCount + 1;
   const plannedSets = lastPerformance.length || 3;
   const lastSamePosition = lastPerformance[completedCount];
-
-  const openPicker = () => {
-    setQuery('');
-    setPickerVisible(true);
-  };
-
-  const closePicker = () => setPickerVisible(false);
-
-  const handlePickExercise = async (exercise: Exercise) => {
-    try {
-      // store 的 addExercise 会自动把 currentIndex 切到新动作，
-      // 并预建第一组（沿用上次练这个动作的重量/次数）。
-      await addExercise(exec, exercise.id);
-    } catch (e) {
-      Alert.alert(
-        '没能加上这个动作',
-        e instanceof Error ? e.message : String(e),
-      );
-      return;
-    }
-    setPickerVisible(false);
-  };
 
   const handleComplete = async () => {
     try {
@@ -384,68 +474,8 @@ export default function SessionScreen() {
         <Text style={styles.finishButtonText}>结束训练</Text>
       </Pressable>
 
-      <Modal
-        visible={pickerVisible}
-        transparent
-        animationType="slide"
-        // Android 的物理返回键 / 手势返回：不接这个回调，返回键会直接退出整屏。
-        onRequestClose={closePicker}
-      >
-        <View style={styles.modalRoot}>
-          <Pressable style={styles.modalBackdrop} onPress={closePicker} />
-          <View style={styles.sheet}>
-            <View style={styles.sheetHeader}>
-              <Text style={styles.sheetTitle}>选择动作</Text>
-              <Pressable
-                style={styles.sheetCancel}
-                onPress={closePicker}
-                accessibilityLabel="取消"
-              >
-                <Text style={styles.sheetCancelText}>取消</Text>
-              </Pressable>
-            </View>
-
-            <TextInput
-              style={styles.search}
-              value={query}
-              onChangeText={setQuery}
-              placeholder="搜索动作名称"
-              placeholderTextColor="#a8adb5"
-              returnKeyType="search"
-              autoCorrect={false}
-            />
-
-            <FlatList
-              data={visibleGroups}
-              keyExtractor={(group) => group.title}
-              keyboardShouldPersistTaps="handled"
-              renderItem={({ item: group }) => (
-                <View>
-                  <Text style={styles.groupTitle}>{group.title}</Text>
-                  {group.data.map((exercise) => (
-                    <Pressable
-                      key={exercise.id}
-                      style={styles.option}
-                      onPress={() => {
-                        void handlePickExercise(exercise);
-                      }}
-                    >
-                      <Text style={styles.optionText}>{exercise.name}</Text>
-                    </Pressable>
-                  ))}
-                </View>
-              )}
-              ListEmptyComponent={
-                <Text style={styles.emptyHint}>
-                  {allExercises.length === 0
-                    ? '动作库是空的'
-                    : `没有找到「${trimmedQuery}」`}
-                </Text>
-              }
-            />
-          </View>
-        </View>
-      </Modal>
+      {/* 与空状态共用同一个弹层实例定义 */}
+      {pickerModal}
     </View>
   );
 }
@@ -453,6 +483,11 @@ export default function SessionScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 20, gap: 10, backgroundColor: '#fff' },
   hint: { textAlign: 'center', color: '#8a8f98', marginTop: 40 },
+
+  // 空状态：内容整体居中，「添加动作」按钮做成整宽的实心主按钮 —— 这一屏
+  // 只有这一个出口，它必须一眼可见、单手够得着。
+  emptyContainer: { justifyContent: 'center' },
+  emptyTip: { textAlign: 'center', color: '#a8adb5', fontSize: 13 },
 
   // 顶部动作条：横向滚动，当前动作高亮
   chipBarWrapper: { marginHorizontal: -16 },
