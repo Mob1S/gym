@@ -1,9 +1,109 @@
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useState } from 'react';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+
+import {
+  CANCELED_MESSAGE,
+  pickAndImportBackup,
+  shareBackup,
+} from '../../src/lib/backupFile';
+import { useDatabase } from '../../src/repositories/database';
+import { useActiveSession } from '../../src/store/activeSession';
+
+/** 哪一件正在跑。用它同时禁用两个按钮 —— 导出和导入都要独占整库，不能并发 */
+type RunningTask = 'export' | 'import' | null;
 
 export default function SettingsTab() {
+  const exec = useDatabase();
+  const [running, setRunning] = useState<RunningTask>(null);
+
+  const handleExport = useCallback(async () => {
+    // 按钮已经 disabled，这里再挡一道：`disabled` 要等一次重渲染才生效，
+    // 手快连点两下时第二次点击可能赶在重渲染之前。
+    if (running !== null) return;
+    setRunning('export');
+    try {
+      await shareBackup(exec);
+    } catch (error) {
+      // 失败必须说出来：分享面板没弹、文件没写出去，用户都看得见，
+      // 但「为什么」只有这里知道。静默失败等于让他以为备份已经存好了。
+      Alert.alert(
+        '导出备份失败',
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setRunning(null);
+    }
+  }, [exec, running]);
+
+  const handleImport = useCallback(async () => {
+    if (running !== null) return;
+    setRunning('import');
+    try {
+      const result = await pickAndImportBackup(exec);
+      if (result.ok) {
+        // 导入是整库替换：如果刚才有一场进行中的训练、而它不在备份里，
+        // 它现在已经被删掉了。内存里那条记录必须一起清掉，否则「继续上次训练」
+        // 会指向一条不存在的记录，点进去是一屏空白。清掉之后训练页会自己
+        // 从库里重新 resume，备份里真带着进行中的训练也接得回来。
+        useActiveSession.getState().reset();
+        Alert.alert('导入完成', result.message);
+      } else if (result.message !== CANCELED_MESSAGE) {
+        // 用户主动取消（没选文件、确认框点了取消）不是错误，不弹任何东西。
+        Alert.alert('导入失败', result.message);
+      }
+    } catch (error) {
+      // `pickAndImportBackup` 的约定是「不抛异常」，但它内部要调三个原生模块，
+      // 兜一道底总比留一个 unhandled rejection + 永远禁用的按钮强。
+      Alert.alert(
+        '导入失败',
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      setRunning(null);
+    }
+  }, [exec, running]);
+
+  const busy = running !== null;
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>设置</Text>
+
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>备份</Text>
+        <Text style={styles.line}>
+          训练记录只存在这台手机上。App 卸载、手机丢失或系统清理数据都会让记录一起消失，
+          建议定期导出一份存到别处。
+        </Text>
+
+        <Pressable
+          style={[styles.button, styles.exportButton, busy && styles.buttonDisabled]}
+          onPress={handleExport}
+          disabled={busy}
+          accessibilityRole="button"
+        >
+          <Text style={styles.buttonText}>
+            {running === 'export' ? '导出中…' : '导出备份'}
+          </Text>
+        </Pressable>
+
+        {/* 导入是整库替换，会把当前记录全部覆盖 —— 用警示色，别让它看起来
+            和「导出」一样安全 */}
+        <Pressable
+          style={[styles.button, styles.importButton, busy && styles.buttonDisabled]}
+          onPress={handleImport}
+          disabled={busy}
+          accessibilityRole="button"
+        >
+          <Text style={styles.buttonText}>
+            {running === 'import' ? '导入中…' : '导入备份'}
+          </Text>
+        </Pressable>
+
+        <Text style={styles.note}>
+          导入会用自己的备份整体替换当前记录（不是合并），替换后无法撤销。
+        </Text>
+      </View>
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>组间休息的一般参考</Text>
@@ -23,6 +123,13 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: '700' },
   card: { backgroundColor: '#f4f5f7', borderRadius: 12, padding: 16, gap: 6 },
   cardTitle: { fontSize: 15, fontWeight: '700', marginBottom: 4 },
-  line: { fontSize: 14, color: '#4b5058' },
+  line: { fontSize: 14, color: '#4b5058', lineHeight: 20 },
   note: { fontSize: 12, color: '#8a8f98', marginTop: 8, lineHeight: 18 },
+
+  button: { borderRadius: 10, paddingVertical: 13, alignItems: 'center', marginTop: 6 },
+  exportButton: { backgroundColor: '#2b7fff' },
+  importButton: { backgroundColor: '#e5484d' },
+  // 进行中：变淡即可，文案本身会变成「导出中…／导入中…」
+  buttonDisabled: { opacity: 0.5 },
+  buttonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });
