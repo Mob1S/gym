@@ -14,6 +14,9 @@ export default function RootLayout() {
           name="session/summary/[id]"
           options={{ headerShown: false }}
         />
+        {/* 历史详情页用原生导航栏：它自带返回手势与安全区处理，这一页顶部只有
+            训练名和日期，不需要自绘顶栏 */}
+        <Stack.Screen name="history/[id]" options={{ title: '训练详情' }} />
       </Stack>
     </DatabaseProvider>
   );
