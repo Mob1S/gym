@@ -150,3 +150,70 @@ export async function listSessionExercises(
   );
   return rows.map(toSessionExercise);
 }
+
+export interface SessionSummary {
+  id: string;
+  name: string | null;
+  startedAt: number;
+  /** 已结束的训练，finishedAt 一定非空 */
+  finishedAt: number;
+  durationMinutes: number;
+  setCount: number;
+  /** 容量负荷（volume load）= Σ(重量 × 次数)，只算已完成的组 */
+  volumeKg: number;
+}
+
+interface SessionSummaryRow {
+  id: string;
+  name: string | null;
+  started_at: number;
+  finished_at: number;
+  set_count: number;
+  volume_kg: number;
+}
+
+/**
+ * 一次查询取回历史列表所需的全部字段。
+ *
+ * 用聚合而不是「先查训练、再逐个查组」，是因为列表页要显示几十场训练 ——
+ * N+1 查询在手机上会肉眼可见地卡。
+ *
+ * `ORDER BY started_at DESC, rowid DESC`：`started_at` 是毫秒时间戳，同毫秒
+ * 建的两场训练会完全并列，此时 SQLite 按扫描顺序返回（即先建的在前），
+ * 语义就反了。rowid 即插入顺序，用它兜底才有确定结果。
+ */
+export async function listSessionSummaries(
+  exec: SqlExecutor,
+  limit: number,
+): Promise<SessionSummary[]> {
+  const rows = await exec.all<SessionSummaryRow>(
+    `SELECT
+       s.id                AS id,
+       s.name              AS name,
+       s.started_at        AS started_at,
+       s.finished_at       AS finished_at,
+       COUNT(CASE WHEN st.is_completed = 1 THEN 1 END)                        AS set_count,
+       COALESCE(SUM(CASE WHEN st.is_completed = 1 THEN st.weight * st.reps END), 0) AS volume_kg
+     FROM session s
+     LEFT JOIN session_exercise se ON se.session_id = s.id
+     LEFT JOIN set_entry st        ON st.session_exercise_id = se.id
+     WHERE s.finished_at IS NOT NULL
+     GROUP BY s.id
+     ORDER BY s.started_at DESC, s.rowid DESC
+     LIMIT ?`,
+    [limit],
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    durationMinutes: Math.max(
+      0,
+      Math.round((row.finished_at - row.started_at) / 60000),
+    ),
+    setCount: Number(row.set_count),
+    volumeKg: Number(row.volume_kg),
+  }));
+}
