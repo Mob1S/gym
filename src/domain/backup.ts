@@ -315,6 +315,29 @@ function normalizeSet(raw: unknown, index: number): FieldResult<SetEntry> {
   };
 }
 
+/**
+ * 在同一个数组里找重复的 id，找到就给出理由（带表名、id、第几条）。
+ *
+ * 为什么必须单独查一遍：重复 id 的记录**引用完整性是过得去的**（引用集合用
+ * Set 去重，反而把重复吞掉了），但导入时会撞主键 → 整个事务回滚。数据是安全的，
+ * 用户看到的却是 SQL 层错误。按「校验失败必须给出能直接弹给用户的中文理由」，
+ * 得在这里拦下来。
+ *
+ * 只查数组内部：四张表的主键互不相干，不同数组之间 id 同名是合法的。
+ */
+function findDuplicateId(items: { id: string }[], tableLabel: string): string | null {
+  const firstIndexById = new Map<string, number>();
+  for (let i = 0; i < items.length; i += 1) {
+    const id = items[i].id;
+    const firstIndex = firstIndexById.get(id);
+    if (firstIndex !== undefined) {
+      return `${tableLabel} 里有重复的 id ${JSON.stringify(id)}（第 ${firstIndex + 1} 条和第 ${i + 1} 条）—— 导入时会撞主键、整份备份都写不进去。请修好这个 id 重复后重试`;
+    }
+    firstIndexById.set(id, i);
+  }
+  return null;
+}
+
 function normalizeList<T>(
   data: Record<string, unknown>,
   key: string,
@@ -336,7 +359,7 @@ function normalizeList<T>(
 /**
  * 校验一份「从文件里读出来的」东西。只读不写：不碰数据库，也不改 input。
  *
- * 覆盖的九类失败：
+ * 覆盖的失败：
  *   1. 顶层不是对象（含 null / 数组）
  *   2. format 不精确匹配（用户选错了文件）
  *   3. version 不是正整数
@@ -344,8 +367,9 @@ function normalizeList<T>(
  *   5. data 不是对象
  *   6. 四个数组缺任何一个 / 不是数组
  *   7. 每条记录的字段类型不对（理由带上第几条的哪个字段）
- *   8. 引用完整性：孤儿 sessionExercise / 孤儿 set
- *   9. 通过时返回规范化对象，多余的字段不透传
+ *   8. 同一个数组里 id 重复（引用完整性拦不住它，但导入时会撞主键）
+ *   9. 引用完整性：孤儿 sessionExercise / 孤儿 set
+ *  10. 通过时返回规范化对象，多余的字段不透传
  */
 export function validateBackup(input: unknown): BackupValidation {
   // 1. 顶层形状
@@ -402,7 +426,19 @@ export function validateBackup(input: unknown): BackupValidation {
   const sets = normalizeList(data, 'sets', normalizeSet);
   if (!sets.ok) return fail(sets.reason);
 
-  // 8. 引用完整性 —— 漏了就会导入一堆孤儿数据
+  // 8. 每个数组内部的 id 不能重复（重复 id 会撞主键，理由要给成人话）
+  const lists: { label: string; items: { id: string }[] }[] = [
+    { label: 'data.exercises', items: exercises.value },
+    { label: 'data.sessions', items: sessions.value },
+    { label: 'data.sessionExercises', items: sessionExercises.value },
+    { label: 'data.sets', items: sets.value },
+  ];
+  for (const list of lists) {
+    const duplicate = findDuplicateId(list.items, list.label);
+    if (duplicate !== null) return fail(duplicate);
+  }
+
+  // 9. 引用完整性 —— 漏了就会导入一堆孤儿数据
   const exerciseIds = new Set(exercises.value.map((exercise) => exercise.id));
   const sessionIds = new Set(sessions.value.map((session) => session.id));
   const sessionExerciseIds = new Set(
@@ -433,7 +469,7 @@ export function validateBackup(input: unknown): BackupValidation {
     }
   }
 
-  // 9. 返回规范化过的对象，input 里多出来的字段一律不透传
+  // 10. 返回规范化过的对象，input 里多出来的字段一律不透传
   return {
     ok: true,
     backup: {

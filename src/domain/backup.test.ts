@@ -370,6 +370,89 @@ describe('validateBackup：引用完整性', () => {
   });
 });
 
+/**
+ * 重复 id 的备份文件是「手工改坏」的典型产物：它每一处引用都指得通，
+ * 所以引用完整性拦不住它，但导入时会撞主键 → 整个事务回滚。
+ * 数据是安全的，用户看到的却是 SQL 层错误。这里的要求是给出人话。
+ */
+describe('validateBackup：重复 id', () => {
+  it('exercises 里有重复 id 时拒绝，理由点名表和 id', () => {
+    const result = validateBackup(
+      rawFile({}, { exercises: [makeExercise(), makeExercise({ name: '深蹲' })] }),
+    );
+    expect(result.ok).toBe(false);
+    const reason = reasonOf(result);
+    expect(reason).toContain('data.exercises');
+    expect(reason).toContain('ex1');
+  });
+
+  it('sessions 里有重复 id 时拒绝', () => {
+    const result = validateBackup(
+      rawFile({}, { sessions: [makeSession(), makeSession({ name: '腿日' })] }),
+    );
+    expect(result.ok).toBe(false);
+    const reason = reasonOf(result);
+    expect(reason).toContain('data.sessions');
+    expect(reason).toContain('sess1');
+  });
+
+  it('sessionExercises 里有重复 id 时拒绝', () => {
+    const result = validateBackup(
+      rawFile(
+        {},
+        {
+          sessionExercises: [
+            makeSessionExercise(),
+            makeSessionExercise({ position: 1 }),
+          ],
+        },
+      ),
+    );
+    expect(result.ok).toBe(false);
+    const reason = reasonOf(result);
+    expect(reason).toContain('data.sessionExercises');
+    expect(reason).toContain('se1');
+  });
+
+  it('sets 里有重复 id 时拒绝', () => {
+    const result = validateBackup(
+      rawFile({}, { sets: [makeSet(), makeSet({ position: 1 })] }),
+    );
+    expect(result.ok).toBe(false);
+    const reason = reasonOf(result);
+    expect(reason).toContain('data.sets');
+    expect(reason).toContain('set1');
+  });
+
+  it('id 重复但内容不同的记录也算重复（按 id 判定，不按内容）', () => {
+    const result = validateBackup(
+      rawFile(
+        {},
+        {
+          sets: [
+            makeSet(),
+            makeSet({ weight: 999, reps: 1, isCompleted: false }),
+          ],
+        },
+      ),
+    );
+    expect(result.ok).toBe(false);
+    expect(reasonOf(result)).toContain('set1');
+  });
+
+  it('不同数组之间 id 同名不算重复（四张表的主键互不相干）', () => {
+    const data = validData();
+    data.exercises = [makeExercise({ id: 'same' })];
+    data.sessions = [makeSession({ id: 'same' })];
+    data.sessionExercises = [
+      makeSessionExercise({ id: 'same', sessionId: 'same', exerciseId: 'same' }),
+    ];
+    data.sets = [makeSet({ id: 'same', sessionExerciseId: 'same' })];
+
+    expect(validateBackup(buildBackup(data, 1, EXPORTED_AT)).ok).toBe(true);
+  });
+});
+
 describe('validateBackup：返回规范化对象', () => {
   it('校验通过时剔除顶层多余字段，只保留格式定义的五个字段', () => {
     const result = validateBackup(
