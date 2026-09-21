@@ -280,3 +280,43 @@ describe('进行中的训练最多一条', () => {
     expect(await listSessionExercises(exec, id)).toEqual([]);
   });
 });
+
+describe('resume 恢复练到第几个动作', () => {
+  beforeEach(() => {
+    useActiveSession.getState().reset();
+  });
+
+  it('停在上次最后碰过的那个动作，而不是永远回到第一个', async () => {
+    const exec = await createMigratedExecutor();
+    const squat = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
+    const bench = await createCustomExercise(exec, '卧推', '胸', '杠铃');
+
+    await useActiveSession.getState().startNew(exec, null);
+    await useActiveSession.getState().addExercise(exec, squat.id);
+    await useActiveSession.getState().completeCurrentSet(exec, 100, 5);
+    await useActiveSession.getState().completeCurrentSet(exec, 100, 5);
+    await useActiveSession.getState().addExercise(exec, bench.id);
+    await useActiveSession.getState().completeCurrentSet(exec, 60, 8);
+
+    useActiveSession.getState().reset(); // 等价于 App 被杀之后重启
+    expect(await useActiveSession.getState().resume(exec)).toBe(true);
+
+    const { exercises, currentIndex } = useActiveSession.getState();
+    expect(exercises.map((e) => e.exerciseName)).toEqual(['深蹲', '卧推']);
+    // 用户是在练卧推的时候被杀的，回来就该在卧推上
+    expect(exercises[currentIndex].exerciseName).toBe('卧推');
+  });
+
+  it('一组都没做时回到第一个动作', async () => {
+    const exec = await createMigratedExecutor();
+    const squat = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
+
+    await useActiveSession.getState().startNew(exec, null);
+    await useActiveSession.getState().addExercise(exec, squat.id);
+
+    useActiveSession.getState().reset();
+    await useActiveSession.getState().resume(exec);
+
+    expect(useActiveSession.getState().currentIndex).toBe(0);
+  });
+});

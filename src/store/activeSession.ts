@@ -7,9 +7,9 @@ import { getExercise } from '../repositories/exerciseRepo';
 import {
   addExerciseToSession,
   createSession,
+  findLastActiveSessionExerciseId,
   finishSession,
   getActiveSession,
-  getSession,
   listSessionExercises,
   listSessions,
 } from '../repositories/sessionRepo';
@@ -122,6 +122,30 @@ function findResting(sets: SetEntry[]): SetEntry | undefined {
 }
 
 /**
+ * 算出「上次停在第几个动作」，用来恢复记录界面的位置。
+ *
+ * 训练里没有「当前动作」这个字段，但推得出来：`completed_at` 最大的那一组
+ * 就是用户最后碰过的组，它归属的动作就是当时停下的地方（正在休息时结论相同，
+ * `startRest` 就是对刚 `completeSet` 的同一组调用的）。为这件事加一列、做一次
+ * 迁移不划算。
+ *
+ * `Math.max(0, …)` 兜住 `findIndex` 找不到时的 -1：直接拿去当 `currentIndex`
+ * 会让记录界面取到 `exercises[-1]`，也就是一片空白。
+ */
+async function resolveCurrentIndex(
+  exec: SqlExecutor,
+  sessionId: string,
+  exercises: ActiveExercise[],
+): Promise<number> {
+  const lastActiveId = await findLastActiveSessionExerciseId(exec, sessionId);
+  if (!lastActiveId) return 0;
+  return Math.max(
+    0,
+    exercises.findIndex((item) => item.sessionExercise.id === lastActiveId),
+  );
+}
+
+/**
  * 往训练里加一个动作，并预建它的第一组。
  *
  * **预建第一组不是可选项。** 记录界面靠「还没完成的那一组」来确定当前该记
@@ -164,7 +188,12 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
       const session = await getActiveSession(exec);
       if (!session) return false;
       const exercises = await loadExercises(exec, session.id);
-      set({ session, exercises, currentIndex: 0, loading: false });
+      set({
+        session,
+        exercises,
+        currentIndex: await resolveCurrentIndex(exec, session.id, exercises),
+        loading: false,
+      });
       return true;
     } finally {
       set({ loading: false });
