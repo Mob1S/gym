@@ -162,6 +162,37 @@ export async function listSessionExercises(
   return rows.map(toSessionExercise);
 }
 
+/**
+ * 找出这场训练里**最近有动作的那一组**所属的 `session_exercise`。
+ *
+ * 用途是恢复「练到第几个动作」：`completed_at` 最大的那一组就是用户最后碰过的
+ * 那组，它归属的动作就是当时停下的地方。训练里没有「当前动作」这个字段，
+ * 但这件事推得出来，不值得为它加一列。
+ *
+ * 正在休息时结论相同 —— `startRest` 就是对刚 `completeSet` 的同一组调用的，
+ * 所以不需要第二条判定。
+ *
+ * `st.rowid DESC` 不能省：同一毫秒完成的两组时间戳完全并列，只按 `completed_at`
+ * 排序时 SQLite 会退化成按扫描顺序返回，语义就反了（`getLastPerformance` 里
+ * 已经踩过同一个坑）。
+ */
+export async function findLastActiveSessionExerciseId(
+  exec: SqlExecutor,
+  sessionId: string,
+): Promise<string | null> {
+  const row = await exec.first<{ id: string }>(
+    `SELECT se.id AS id
+       FROM set_entry st
+       JOIN session_exercise se ON se.id = st.session_exercise_id
+      WHERE se.session_id = ?
+        AND st.completed_at IS NOT NULL
+      ORDER BY st.completed_at DESC, st.rowid DESC
+      LIMIT 1`,
+    [sessionId],
+  );
+  return row?.id ?? null;
+}
+
 export interface SessionSummary {
   id: string;
   name: string | null;

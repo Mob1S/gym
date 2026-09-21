@@ -3,6 +3,7 @@ import type { SqlExecutor } from '../db/types';
 import {
   addExerciseToSession,
   createSession,
+  findLastActiveSessionExerciseId,
   finishSession,
   getActiveSession,
   getSession,
@@ -10,6 +11,7 @@ import {
   listSessions,
 } from './sessionRepo';
 import { createCustomExercise } from './exerciseRepo';
+import { addSet, completeSet } from './setRepo';
 
 describe('sessionRepo', () => {
   it('新建的训练是进行中状态', async () => {
@@ -134,5 +136,47 @@ describe('sessionRepo', () => {
 
     const list = await listSessions(exec, 10);
     expect(list.map((s) => s.name)).toEqual(['后建的', '先建的']);
+  });
+
+  it('findLastActiveSessionExerciseId 取最近做过组的那个动作', async () => {
+    const exec = await createMigratedExecutor();
+    const s = await createSession(exec, '腿部日');
+    const ex1 = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
+    const ex2 = await createCustomExercise(exec, '腿举', '腿', '器械');
+    const se1 = await addExerciseToSession(exec, s.id, ex1.id);
+    const se2 = await addExerciseToSession(exec, s.id, ex2.id);
+
+    const first = await addSet(exec, se1.id, 100, 5);
+    await completeSet(exec, first.id, 1_000);
+    const second = await addSet(exec, se2.id, 50, 10);
+    await completeSet(exec, second.id, 2_000);
+
+    expect(await findLastActiveSessionExerciseId(exec, s.id)).toBe(se2.id);
+  });
+
+  it('一组都没完成时返回 null', async () => {
+    const exec = await createMigratedExecutor();
+    const s = await createSession(exec, '腿部日');
+    const ex1 = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
+    const se1 = await addExerciseToSession(exec, s.id, ex1.id);
+    await addSet(exec, se1.id, 100, 5); // 建出来但没完成
+
+    expect(await findLastActiveSessionExerciseId(exec, s.id)).toBeNull();
+  });
+
+  it('只看这一场训练：别的训练里做过的组不算数', async () => {
+    const exec = await createMigratedExecutor();
+    const ex = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
+
+    const other = await createSession(exec, '别的一场');
+    const seOther = await addExerciseToSession(exec, other.id, ex.id);
+    const done = await addSet(exec, seOther.id, 100, 5);
+    await completeSet(exec, done.id, 5_000);
+
+    const s = await createSession(exec, '这一场');
+    const se = await addExerciseToSession(exec, s.id, ex.id);
+    await addSet(exec, se.id, 100, 5);
+
+    expect(await findLastActiveSessionExerciseId(exec, s.id)).toBeNull();
   });
 });
