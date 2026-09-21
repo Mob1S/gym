@@ -17,6 +17,8 @@ export default function RootLayout() {
         {/* 历史详情页用原生导航栏：它自带返回手势与安全区处理，这一页顶部只有
             训练名和日期，不需要自绘顶栏 */}
         <Stack.Screen name="history/[id]" options={{ title: '训练详情' }} />
+        {/* 动作进步曲线：用原生导航栏，标题由页面自己设成动作名 */}
+        <Stack.Screen name="exercise/[id]" options={{ title: '进步' }} />
       </Stack>
     </DatabaseProvider>
   );
