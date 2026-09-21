@@ -1350,6 +1350,47 @@ git commit -m "docs: 训练生命周期修复的真机验收结果"
 
 ---
 
+## 实施记录（2026-09-21）
+
+9 个 Task 由独立 subagent 逐个执行，每个 Task 完成后由主 agent 复核（读 diff + `npx tsc --noEmit` + 全量 `npx jest --runInBand`）再放行下一个。
+
+| Task | 提交 | 内容 |
+|---|---|---|
+| 1 | `73f12dc` | 日期时间格式化抽成 `src/lib/format.ts` |
+| 2 | `f13cb9a` | `findLastActiveSessionExerciseId` |
+| 3 | `5484f7c` | 不变量：`startNew` 冲突、`endWorkout` 清内存、三处防御闸门 |
+| 4 | `9445763` | `resume` 恢复练到第几个动作 |
+| 5 | `25e7d88` | `describeExercises` |
+| 6 + 8 | `dbb065f` | 主页 + 总结页（见下面的并发事故） |
+| 7 | `56c0080` | 记录页写保护与空态 |
+
+### 计划本身的四处笔误（实施中已修正）
+
+| # | 位置 | 笔误 | 实际做法 |
+|---|---|---|---|
+| 1 | Task 1 Step 4 | 写「5 个用例全绿」，但同一节给的测试代码是 7 条 | 按代码块执行，7 条全绿 |
+| 2 | Task 3 Step 1 | 称「`getSession` 已经在文件顶部的 import 里」—— 实际没有，那里只有 `listSessionExercises` | 在 `sessionRepo` 的 import 块里补了 `getSession` |
+| 3 | Task 3 Step 3d | 结尾写 `reset();`。但在 `create((set, get) => ({ … }))` 的对象字面量里没有这个绑定，照抄会在运行时抛 `ReferenceError: reset is not defined`，Step 4 必然无法变绿 | 写成 `get().reset();` |
+| 4 | Task 4 Step 3a | import 块里仍列着 `getSession`，但 Task 3 删掉 `endWorkout` 里那次 reload 之后它已是死代码 | 从 import 列表里去掉 |
+
+### 一次并发提交事故
+
+Task 6 与 Task 8 并行执行，各自 `git add` 自己那一个文件之后再 `git commit`。两次 add 与两次 commit 交错，而 **git 的 index 是共享的** —— Task 8 的 `app/session/summary/[id].tsx` 被夹带进了 Task 6 的提交：
+
+```
+dbb065f fix(home): 继续上次训练只在真没结束时出现，并写明是哪一场
+ app/(tabs)/index.tsx         | 99 ++++++++++++++++++++++++++++
+ app/session/summary/[id].tsx | 28 +++++++-------      ← 这是 Task 8 的改动
+```
+
+内容逐字核对无误、没有丢失，只是提交信息与归属对不上（计划 Task 8 Step 5 要求的那条提交信息没有产生对应的 commit）。
+
+**处置：接受现状，不改写历史。** `main` 当时尚未推送，改写技术上可行，但为一条提交信息去重写提交、而当时仍有 agent 在活动，风险明显大于收益。
+
+**教训**：即使每个 agent 都只 `git add` 自己那一个文件，「逐个指定文件」也**防不住** add/commit 交错 —— 因为 add 与 commit 之间隔着一个共享的 index。真正可靠的两条路：并行任务**串行提交**，或者用 `git commit -- <path>`（只提交指定路径，不依赖 index 里别的东西）。本次那句「提交前复跑 `git diff --cached --name-only` 断言只含自己的文件」是在 add 之后、commit 之前做的，仍然会被夹带。
+
+---
+
 ## 附：这次刻意不做的事
 
 - **不加时间上限**（「超过 N 小时就作废」）—— 用户的实际流程是每次练完都点结束，正常路径下根本不会留下未结束的训练（设计文档 §2.4）
