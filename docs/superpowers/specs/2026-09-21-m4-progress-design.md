@@ -181,10 +181,19 @@ export async function listTrainedExercises(
 ### 5.2 新增 `src/domain/progress.ts`（纯函数，全部可单测）
 
 ```ts
+/** 输入形状。写成结构化的最小形状，让 domain 不反过来依赖 repositories —— 仓储层的 CompletedSetPoint 天然满足它 */
+export interface SetPointInput {
+  sessionId: string;
+  startedAt: number;
+  weight: number;
+  reps: number;
+}
+
 export interface ProgressPoint {
   sessionId: string;
   startedAt: number;
-  maxWeight: number;
+  /** 该场最重的那一组（不论次数，并列取次数多的）。列表行的「65 kg × 5」和重量曲线都用它 */
+  maxWeightSet: { weight: number; reps: number };
   volumeLoad: number;
   /** null = 这一场没有可用于换算的组（次数全 > 10） */
   bestOneRepMax: number | null;
@@ -193,7 +202,15 @@ export interface ProgressPoint {
 }
 
 /** 把某个动作的原始组，按训练分组折算成曲线上的点（按时间升序） */
-export function buildProgressPoints(rows: CompletedSetPoint[]): ProgressPoint[];
+export function buildProgressPoints(rows: SetPointInput[]): ProgressPoint[];
+
+export type ProgressMetric = 'maxWeight' | 'volumeLoad' | 'oneRepMax';
+
+/** 折线图要的裸数值序列；e1RM 曲线上「整场算不出来」的那几次是 null */
+export function toSeries(
+  points: ProgressPoint[],
+  metric: ProgressMetric,
+): (number | null)[];
 
 export interface BestMark<T> { value: T; at: number }
 export interface ProgressSummary {
@@ -232,7 +249,8 @@ interface TrendChartProps {
 - 用 `react-native-svg` 的 `Polyline` + `Circle` + `Line`，不引图表库：这里只有折线和圆点，引库反而要跟它的样式打架。
 - **有效点只有一个时只画点、不画线**，并在卡外补一句「再练一次就能看到走势」。
 - **一个有效点都没有时**：不渲染图，显示「还没有记录」。
-- 点为 `null` 的位置**不画圆点**；`highlightIndex` 指向的点画成绿色实心并标出数值与日期。
+- 点为 `null` 的位置**不画圆点**；`highlightIndex` 指向的点画成绿色实心。
+- **数值与日期不画进图里，写在卡片头部**。卡片顶部本来就有「最好 · 9月9日」和大数字，图里再画一遍文字既是重复，又要在窄屏上处理贴边溢出（最容易翻车的地方）。**图只负责回答「最高点是哪一个」，文字由卡片负责。**
 
 ### 5.4 路由与页面
 
