@@ -7,8 +7,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { SessionSummaryView } from '../../../src/components/SessionSummaryView';
 import { releaseScreenAwake } from '../../../src/lib/keepAwake';
 import { useDatabase } from '../../../src/repositories/database';
-import { finishSession } from '../../../src/repositories/sessionRepo';
-import { useActiveSession } from '../../../src/store/activeSession';
+import { finishSession, getSession } from '../../../src/repositories/sessionRepo';
 
 /**
  * 训练总结页：一次训练结束后，把统计数字和「组间休息回顾」摊开给用户看。
@@ -26,27 +25,24 @@ export default function SummaryScreen() {
   // 历史详情页复用，那一页的外壳（导航栏 / 滚动容器）不一定和这里一样。
   const insets = useSafeAreaInsets();
 
-  const endWorkout = useActiveSession((s) => s.endWorkout);
-  const reset = useActiveSession((s) => s.reset);
-
   const [saving, setSaving] = useState(false);
 
   const handleSave = async () => {
     if (saving) return;
     setSaving(true);
     try {
-      // endWorkout 会结束进行中的休息并写入 finished_at。它只作用于 store 里
-      // 那场训练，所以补一道兜底：强杀后经深链直接进这一屏时 store 是空的，
-      // 光靠它 finished_at 永远不会写，训练页会一直显示「继续上次训练」。
-      await endWorkout(exec);
-      if (id && useActiveSession.getState().session?.id !== id) {
-        await finishSession(exec, id, Date.now());
+      // 落盘已经在「结束训练」那一下完成了，这里只做兜底：强杀后经深链直接进
+      // 这一屏时 store 是空的，那一下没跑过，这一场的 finished_at 还是 NULL。
+      //
+      // **只在这场确实没结束时才写。** 无条件覆盖会把已经写好的结束时间往后推，
+      // 总结页的时长跟着一起变长 —— 那是用户能看见的数字。
+      if (id) {
+        const stored = await getSession(exec, id);
+        if (stored && stored.finishedAt === null) {
+          await finishSession(exec, id, Date.now());
+        }
       }
 
-      // `endWorkout` 会把刚结束的这场训练留在 store 里（finishedAt 非空），
-      // 而训练页只看 session 是否存在就显示「继续上次训练」—— 不 reset 的话，
-      // 保存完回到训练页仍会看到那个按钮，点进去是一场已经结束的训练。
-      reset();
       releaseScreenAwake();
       router.replace('/(tabs)');
     } catch (e) {
@@ -77,7 +73,7 @@ export default function SummaryScreen() {
         }}
         disabled={saving}
       >
-        <Text style={styles.saveButtonText}>保存这次训练</Text>
+        <Text style={styles.saveButtonText}>完成</Text>
       </Pressable>
     </ScrollView>
   );
