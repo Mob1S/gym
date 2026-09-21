@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { formatDate } from '../../src/lib/format';
 import { useDatabase } from '../../src/repositories/database';
 import {
   listSessionSummaries,
@@ -18,17 +19,6 @@ import {
 
 /** 列表一次取多少条：够翻一阵子，又不至于把几十场训练全塞进内存 */
 const HISTORY_LIMIT = 50;
-
-/** 下标即 `getDay()` 的返回值：0 = 周日，1 = 周一 …… 6 = 周六 */
-const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-
-/** `9月16日 周三` —— 用本地时区的 getter，绕开 toLocaleDateString 在 Hermes 上的地区差异 */
-function formatDate(timestamp: number): string {
-  const date = new Date(timestamp);
-  return `${date.getMonth() + 1}月${date.getDate()}日 ${
-    WEEKDAY_LABELS[date.getDay()]
-  }`;
-}
 
 /** 容量是「重量 × 次数」累加出来的大数，加千位分隔才读得下去 */
 function formatVolume(volumeKg: number): string {
