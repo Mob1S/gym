@@ -1373,6 +1373,12 @@ git commit -m "docs: 训练生命周期修复的真机验收结果"
 | 3 | Task 3 Step 3d | 结尾写 `reset();`。但在 `create((set, get) => ({ … }))` 的对象字面量里没有这个绑定，照抄会在运行时抛 `ReferenceError: reset is not defined`，Step 4 必然无法变绿 | 写成 `get().reset();` |
 | 4 | Task 4 Step 3a | import 块里仍列着 `getSession`，但 Task 3 删掉 `endWorkout` 里那次 reload 之后它已是死代码 | 从 import 列表里去掉 |
 
+### 一处有意的界面偏离
+
+设计文档 §4.1 写的是三按钮弹窗 `[接着练] [结束它，开始新的] [取消]`，实际实现成**两个按钮 + `cancelable: true`**。
+
+原因：Android 的 `Alert` 最多三个按钮，且 RN 的映射是 `[neutral, negative, positive]`（`buttonPositive = validButtons.pop()`，取数组最后一个）。三个按钮时必然有一个落进最右那个加粗的「主按钮」位置 —— 无论把「接着练」还是「结束它，开始新的」放在那儿都是误导。第三条路「什么都不做」交给点空白处 / 返回键，语义等价而不会制造一个误触的默认项。
+
 ### 一次并发提交事故
 
 Task 6 与 Task 8 并行执行，各自 `git add` 自己那一个文件之后再 `git commit`。两次 add 与两次 commit 交错，而 **git 的 index 是共享的** —— Task 8 的 `app/session/summary/[id].tsx` 被夹带进了 Task 6 的提交：
@@ -1387,7 +1393,14 @@ dbb065f fix(home): 继续上次训练只在真没结束时出现，并写明是�
 
 **处置：接受现状，不改写历史。** `main` 当时尚未推送，改写技术上可行，但为一条提交信息去重写提交、而当时仍有 agent 在活动，风险明显大于收益。
 
-**教训**：即使每个 agent 都只 `git add` 自己那一个文件，「逐个指定文件」也**防不住** add/commit 交错 —— 因为 add 与 commit 之间隔着一个共享的 index。真正可靠的两条路：并行任务**串行提交**，或者用 `git commit -- <path>`（只提交指定路径，不依赖 index 里别的东西）。本次那句「提交前复跑 `git diff --cached --name-only` 断言只含自己的文件」是在 add 之后、commit 之前做的，仍然会被夹带。
+**教训**：即使每个 agent 都只 `git add` 自己那一个文件，「逐个指定文件」也**防不住** add/commit 交错 —— 因为 add 与 commit 之间隔着一个共享的 index。本次那句「提交前复跑 `git diff --cached --name-only` 断言只含自己的文件」是在 add 之后、commit 之前做的，仍然会被夹带。
+
+两个候选补救，都只解决一半：
+
+- `git commit -- <path>` 会绕过 index、只提交给定路径，**能保住自己这条提交不被夹带**；但别人已经 staged 的内容仍然留在 index 里，会被下一个提交者一起带走。它是「不让别人污染我」，不是「我不污染别人」。
+- 真正稳的只有**串行提交**：并行执行的 agent 只写文件、不提交，由主 agent 在全部 Task 落地后按顺序逐个提交。
+
+下次要并行就得选后者。
 
 ---
 
