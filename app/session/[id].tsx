@@ -95,12 +95,30 @@ export default function SessionScreen() {
   const [query, setQuery] = useState('');
   const [allExercises, setAllExercises] = useState<Exercise[]>([]);
 
+  // 收尾中：`endWorkout` 会立刻清空 store，而 `router.replace` 还在后面。
+  // 不挡住这一帧的话，屏幕上会闪过一句「这场训练不存在或已结束」。
+  const [finishing, setFinishing] = useState(false);
+  // 深链进来时 store 可能是空的，得先知道「加载中」和「确实没有」的区别 ——
+  // 只判 `!session` 的话，一个不存在的 id 会让这一屏永远停在「载入中…」。
+  const [loadState, setLoadState] = useState<'loading' | 'ready' | 'missing'>(
+    'loading',
+  );
+
   // 从训练页跳进来时 store 里已经有 session；但如果 App 被强杀后用深链直接
   // 打开这个路由，store 是空的，得自己把库里的未结束训练捡回来。
   useEffect(() => {
-    if (!session || session.id !== id) {
-      void resume(exec);
+    let cancelled = false;
+    if (session && session.id === id) {
+      setLoadState('ready');
+      return undefined;
     }
+    void (async () => {
+      const found = await resume(exec);
+      if (!cancelled) setLoadState(found ? 'ready' : 'missing');
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [exec, id, resume, session]);
 
   const current = exercises[currentIndex];
@@ -273,10 +291,54 @@ export default function SessionScreen() {
     </Modal>
   );
 
+  if (finishing) {
+    // 一帧的白屏，紧接着就是总结页
+    return <View style={styles.container} />;
+  }
+
   if (!session || session.id !== id) {
     return (
-      <View style={styles.container}>
-        <Text style={styles.hint}>载入中…</Text>
+      <View
+        style={[
+          styles.container,
+          styles.emptyContainer,
+          { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 20 },
+        ]}
+      >
+        <Text style={styles.hint}>
+          {loadState === 'loading' ? '载入中…' : '这场训练不存在或已结束'}
+        </Text>
+        {loadState === 'missing' ? (
+          <Pressable
+            style={styles.completeButton}
+            onPress={() => router.replace('/(tabs)')}
+          >
+            <Text style={styles.completeButtonText}>回主页</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    );
+  }
+
+  // 写保护：这场已经结束了，就不该再渲染记录界面。
+  // 深链（或从总结页按系统返回键绕回来）能走到这里，而「结束」必须不可逆 ——
+  // 之前同一场训练被接上第二次、第三次，靠的就是这里没有这道判断。
+  if (session.finishedAt !== null) {
+    return (
+      <View
+        style={[
+          styles.container,
+          styles.emptyContainer,
+          { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 20 },
+        ]}
+      >
+        <Text style={styles.hint}>这场训练已经结束</Text>
+        <Pressable
+          style={styles.completeButton}
+          onPress={() => router.replace('/(tabs)')}
+        >
+          <Text style={styles.completeButtonText}>回主页</Text>
+        </Pressable>
       </View>
     );
   }
@@ -383,7 +445,19 @@ export default function SessionScreen() {
         text: '结束',
         style: 'destructive',
         onPress: async () => {
-          await endWorkout(exec);
+          // 先挡住重渲染：endWorkout 会清空 store，而导航还在它后面。
+          setFinishing(true);
+          try {
+            await endWorkout(exec);
+          } catch (e) {
+            // 失败必须让用户知道，否则这一屏会一直停在空白上
+            setFinishing(false);
+            Alert.alert(
+              '没能结束这次训练',
+              e instanceof Error ? e.message : String(e),
+            );
+            return;
+          }
           router.replace({ pathname: '/session/summary/[id]', params: { id } });
         },
       },
