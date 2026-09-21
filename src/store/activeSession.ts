@@ -27,6 +27,14 @@ import {
 const DEFAULT_WEIGHT_KG = 20;
 const DEFAULT_REPS = 8;
 
+/**
+ * `startNew` 的两种结果。
+ *
+ * `'conflict'` 表示库里已经有一场进行中的训练，此时**没有**新建任何东西，
+ * 那一场已经装进 store —— 界面据此问用户「接着练还是结束它」。
+ */
+export type StartResult = 'started' | 'conflict';
+
 export interface ActiveExercise {
   sessionExercise: SessionExercise;
   exerciseName: string;
@@ -41,8 +49,15 @@ interface ActiveSessionState {
 
   /** 载入未结束的训练；没有就返回 false */
   resume: (exec: SqlExecutor) => Promise<boolean>;
-  /** 开一场新训练，并沿用上一次训练的动作组合（没有历史时为空） */
-  startNew: (exec: SqlExecutor, name: string | null) => Promise<void>;
+  /**
+   * 开一场新训练，沿用上一次**已结束**训练的动作组合（没有历史时为空）。
+   *
+   * 库里已经有一场进行中的训练时**不新建**，返回 `'conflict'` 并把那一场装进
+   * store 交回界面。这是「同时只可能有一场进行中的训练」这条不变量唯一的守门人 ——
+   * 少了它，每点一次「开始新训练」都会多留一条未结束的记录，然后在你结束新的
+   * 那场之后冒出来，冒充「上次训练」。
+   */
+  startNew: (exec: SqlExecutor, name: string | null) => Promise<StartResult>;
   addExercise: (exec: SqlExecutor, exerciseId: string) => Promise<void>;
   setCurrentIndex: (index: number) => void;
   /** 完成当前组的记录，落盘并立刻开始休息计时 */
@@ -53,7 +68,11 @@ interface ActiveSessionState {
   ) => Promise<void>;
   /** 结束休息，写入 rest_seconds，显示下一组 */
   beginNextSet: (exec: SqlExecutor) => Promise<void>;
-  endWorkout: (exec: SqlExecutor) => Promise<void>;
+  /**
+   * 结束这场训练：写 `finished_at`，**并立刻清空 store**。
+   * 返回被结束的那场的 id（没有当前训练时返回 null）。
+   */
+  endWorkout: (exec: SqlExecutor) => Promise<string | null>;
   reset: () => void;
 }
 
@@ -153,6 +172,11 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
   },
 
   startNew: async (exec, name) => {
+    // 复用 `resume` 而不是另写一次查询：它会把那一场连动作带组一起装进 store，
+    // 界面选「接着练」时直接导航过去就有东西可渲染 —— 只返回一个 id 的话，
+    // 记录页会因为 store 里没有 exercises 而误判成「这次训练还没有动作」。
+    if (await get().resume(exec)) return 'conflict';
+
     const session = await createSession(exec, name);
 
     // 沿用上一次训练的动作组合，而不是每次都替用户挑一个动作。
@@ -176,11 +200,15 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
 
     const exercises = await loadExercises(exec, session.id);
     set({ session, exercises, currentIndex: 0, loading: false });
+    return 'started';
   },
 
   addExercise: async (exec, exerciseId) => {
     const { session } = get();
-    if (!session) return;
+    // 已结束的训练不能再往里加东西。正常路径下 `endWorkout` 已经清空 store、
+    // session 为 null，这里挡的是「有人把一场已结束的训练塞回 store」——
+    // 之前的 bug 就是这么让同一场训练被接上第二次、第三次的。
+    if (!session || session.finishedAt !== null) return;
 
     await addExerciseWithFirstSet(exec, session.id, exerciseId);
 
@@ -192,7 +220,7 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
 
   completeCurrentSet: async (exec, weight, reps) => {
     const { session, exercises, currentIndex } = get();
-    if (!session) return;
+    if (!session || session.finishedAt !== null) return;
 
     const current = exercises[currentIndex];
     if (!current) return;
@@ -219,7 +247,8 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
   },
 
   beginNextSet: async (exec) => {
-    const { exercises, currentIndex } = get();
+    const { session, exercises, currentIndex } = get();
+    if (!session || session.finishedAt !== null) return;
     const current = exercises[currentIndex];
     if (!current) return;
 
@@ -236,7 +265,7 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
 
   endWorkout: async (exec) => {
     const { session, exercises, currentIndex } = get();
-    if (!session) return;
+    if (!session) return null;
 
     // 收尾：如果正处在休息中，先把这段休息结掉，
     // 否则这一组的 rest_seconds 永远是 NULL，总结页算不出平均休息。
@@ -246,12 +275,18 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
       await endRest(exec, resting.id, Date.now());
     }
 
-    await finishSession(exec, session.id, Date.now());
+    const finishedId = session.id;
+    await finishSession(exec, finishedId, Date.now());
 
-    // 收尾时把数据重新加载一遍，保证总结页看到的是落盘后的状态
-    const reloaded = await loadExercises(exec, session.id);
-    const fresh = await getSession(exec, session.id);
-    set({ session: fresh, exercises: reloaded });
+    // 结束之后**立刻清空内存**，而不是等用户在总结页点「完成」。
+    // 「已经结束但还是当前训练」这个中间态正是主页一直显示「继续上次训练」的
+    // 直接原因：用户从总结页按系统返回键离开时永远走不到清空那一步，而主页
+    // 只看 store 里有没有 session。
+    //
+    // 总结页不受影响：它按路由参数从库里读，不依赖 store。
+    get().reset();
+
+    return finishedId;
   },
 
   reset: () => set({ session: null, exercises: [], currentIndex: 0 }),

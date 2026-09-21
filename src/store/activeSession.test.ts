@@ -9,6 +9,7 @@ import {
   addExerciseToSession,
   createSession,
   finishSession,
+  getSession,
   listSessionExercises,
 } from '../repositories/sessionRepo';
 import {
@@ -176,7 +177,7 @@ describe('开始新训练时沿用上一次的动作组合', () => {
     }
   });
 
-  it('还在进行中的训练不算「上一次」，不会被复制', async () => {
+  it('进行中的训练不会被当成「上一次」，startNew 直接交回冲突', async () => {
     const exec = await createMigratedExecutor();
     // 同上：预置库也灌上，这条才同时挡住「从进行中的训练复制」和
     // 「随便挑一个动作塞进去」两种旧行为。
@@ -185,9 +186,97 @@ describe('开始新训练时沿用上一次的动作组合', () => {
     const exercise = await createCustomExercise(exec, '硬拉', '背', '杠铃');
     await addExerciseToSession(exec, running.id, exercise.id);
 
-    await useActiveSession.getState().startNew(exec, null);
+    expect(await useActiveSession.getState().startNew(exec, null)).toBe('conflict');
+    // 没有新建任何训练，也就没有「复制了谁」这回事
+    expect(useActiveSession.getState().session?.id).toBe(running.id);
+  });
+});
 
-    const { exercises } = useActiveSession.getState();
-    expect(exercises).toEqual([]);
+/** 库里还剩几条没结束的训练 —— 不变量就是它 ≤ 1 */
+async function countUnfinished(exec: SqlExecutor): Promise<number> {
+  const row = await exec.first<{ n: number }>(
+    'SELECT COUNT(*) AS n FROM session WHERE finished_at IS NULL',
+  );
+  return Number(row?.n ?? 0);
+}
+
+async function countAllSessions(exec: SqlExecutor): Promise<number> {
+  const row = await exec.first<{ n: number }>('SELECT COUNT(*) AS n FROM session');
+  return Number(row?.n ?? 0);
+}
+
+describe('进行中的训练最多一条', () => {
+  beforeEach(() => {
+    useActiveSession.getState().reset();
+  });
+
+  it('结束训练之后 store 立刻清空，库里也写上了 finished_at', async () => {
+    const exec = await createMigratedExecutor();
+
+    await useActiveSession.getState().startNew(exec, null);
+    const id = useActiveSession.getState().session!.id;
+    const finishedId = await useActiveSession.getState().endWorkout(exec);
+
+    expect(finishedId).toBe(id);
+    // 这一条就是用户报的 bug：结束之后主页还显示「继续上次训练」，
+    // 因为内存里那条没清。
+    expect(useActiveSession.getState().session).toBeNull();
+    expect(await countUnfinished(exec)).toBe(0);
+  });
+
+  it('结束之后紧接着开新的一场，不会再撞上冲突', async () => {
+    const exec = await createMigratedExecutor();
+
+    await useActiveSession.getState().startNew(exec, null);
+    await useActiveSession.getState().endWorkout(exec);
+
+    expect(await useActiveSession.getState().startNew(exec, null)).toBe('started');
+    expect(await countUnfinished(exec)).toBe(1);
+  });
+
+  it('库里有一场进行中的训练时，startNew 返回 conflict 且不新建', async () => {
+    const exec = await createMigratedExecutor();
+    const running = await createSession(exec, '没结束的训练');
+
+    expect(await useActiveSession.getState().startNew(exec, null)).toBe('conflict');
+    expect(await countAllSessions(exec)).toBe(1);
+    // 冲突的那一场必须已经装进 store：界面选「接着练」要直接导航过去，
+    // 选「结束它」要能对它调 endWorkout。
+    expect(useActiveSession.getState().session?.id).toBe(running.id);
+  });
+
+  it('连着调两次 startNew，只会留下一条未结束的训练', async () => {
+    const exec = await createMigratedExecutor();
+
+    expect(await useActiveSession.getState().startNew(exec, null)).toBe('started');
+    expect(await useActiveSession.getState().startNew(exec, null)).toBe('conflict');
+
+    expect(await countUnfinished(exec)).toBe(1);
+  });
+
+  it('已结束的训练不会被 resume 接回来', async () => {
+    const exec = await createMigratedExecutor();
+
+    await useActiveSession.getState().startNew(exec, null);
+    await useActiveSession.getState().endWorkout(exec);
+
+    expect(await useActiveSession.getState().resume(exec)).toBe(false);
+    expect(useActiveSession.getState().session).toBeNull();
+  });
+
+  it('已结束的训练不接受新动作（防御闸门）', async () => {
+    const exec = await createMigratedExecutor();
+    const squat = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
+
+    await useActiveSession.getState().startNew(exec, null);
+    const id = useActiveSession.getState().session!.id;
+    await useActiveSession.getState().endWorkout(exec);
+
+    // 模拟「有人绕过状态机，把一场已结束的训练塞回 store」
+    const finished = await getSession(exec, id);
+    useActiveSession.setState({ session: finished });
+    await useActiveSession.getState().addExercise(exec, squat.id);
+
+    expect(await listSessionExercises(exec, id)).toEqual([]);
   });
 });
