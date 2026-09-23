@@ -44,6 +44,13 @@ export type BackupValidation =
  * 组装一份备份文件。只做组装，不做校验 —— 数据来自本机仓储，是可信来源；
  * 校验的门在 `validateBackup`（读别人的文件时才需要）。
  */
+/**
+ * @param data 四张表的全部实体，直接来自 `backupRepo.exportAll`
+ * @param schemaVersion 导出时库的结构版本（各仓储之上的 `SCHEMA_VERSION`）
+ * @param exportedAt 导出时刻的时间戳；**同时决定备份文件名**，所以由调用方
+ *                   传入同一个值，别让文件内容和文件名各读一次时钟
+ * @returns 可直接 `JSON.stringify` 落盘的备份对象
+ */
 export function buildBackup(
   data: BackupData,
   schemaVersion: number,
@@ -58,17 +65,40 @@ export function buildBackup(
   };
 }
 
+/**
+ * 「取一个字段」的结果。**不用异常表达失败** —— 校验要检查几十个字段，
+ * 每个都 try/catch 会让主流程读不出「检查了哪些字段」这个顺序。
+ */
 type FieldResult<T> = { ok: true; value: T } | { ok: false; reason: string };
 
+/**
+ * @param reason 已经是给用户看的中文理由
+ * @returns 失败结果，直接往上层抛
+ */
 function fail(reason: string): BackupValidation {
   return { ok: false, reason };
 }
 
+/**
+ * 判断是不是「普通对象」。
+ *
+ * **必须排除数组和 null**：`typeof null === 'object'`、`typeof [] === 'object'`，
+ * 少了这两个排除，一个数组会被当成合法的 `data` 放进去，然后在取字段时才炸。
+ *
+ * @param value 任意值
+ * @returns true 表示可以按下标取字段
+ */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** 把收到的值描述成一小段人能看懂的文字，放进 reason 里 */
+/**
+ * 把收到的值描述成一小段人能看懂的文字，放进 reason 里。
+ *
+ * @param value 用户文件里那个不合法的值
+ * @returns 如 `null` / `数组(3 项)` / `字符串 "abc"` / `对象`；
+ *          **字符串会带引号**，因为用户最常遇到的错误就是「字段类型对但值是错的」
+ */
 function describe(value: unknown): string {
   if (value === null) return 'null';
   if (value === undefined) return 'undefined';
@@ -79,6 +109,12 @@ function describe(value: unknown): string {
   return `${typeof value} ${String(value)}`;
 }
 
+/**
+ * @param source 待检查的记录
+ * @param key 字段名
+ * @param label 拼进 reason 里的中文位置说明，如 `data.exercises 第 3 条的 id`
+ * @returns 该字段的值；**空字符串也算不合法**（id 为空就没法引用）
+ */
 function takeString(
   source: Record<string, unknown>,
   key: string,
@@ -91,6 +127,12 @@ function takeString(
   return { ok: true, value };
 }
 
+/**
+ * @param source 待检查的记录
+ * @param key 字段名
+ * @param label 拼进 reason 里的中文位置说明
+ * @returns 字符串或 null；**缺字段（undefined）会被拒绝**，必须显式写 null
+ */
 function takeNullableString(
   source: Record<string, unknown>,
   key: string,
@@ -104,6 +146,13 @@ function takeNullableString(
   return { ok: true, value };
 }
 
+/**
+ * @param source 待检查的记录
+ * @param key 字段名
+ * @param label 拼进 reason 里的中文位置说明
+ * @returns 布尔值；**0/1 会被拒绝**（JSON 里就该是 true/false，宽容处理会让
+ *          格式定义失去意义）
+ */
 function takeBoolean(
   source: Record<string, unknown>,
   key: string,
@@ -116,7 +165,14 @@ function takeBoolean(
   return { ok: true, value };
 }
 
-/** 有限数字：NaN / Infinity / 字符串统统不接受 */
+/**
+ * 有限数字：NaN / Infinity / 字符串统统不接受。
+ *
+ * @param source 待检查的记录
+ * @param key 字段名
+ * @param label 拼进 reason 里的中文位置说明
+ * @returns 有限数；`NaN` 会被拦下，因为它写进库之后会让所有比较都变成 false
+ */
 function takeFiniteNumber(
   source: Record<string, unknown>,
   key: string,
@@ -129,6 +185,12 @@ function takeFiniteNumber(
   return { ok: true, value };
 }
 
+/**
+ * @param source 待检查的记录
+ * @param key 字段名
+ * @param label 拼进 reason 里的中文位置说明
+ * @returns 有限数或 null（用于 `finishedAt` / `restSeconds` 这类可空时间字段）
+ */
 function takeNullableFiniteNumber(
   source: Record<string, unknown>,
   key: string,
@@ -145,6 +207,12 @@ function takeNullableFiniteNumber(
   return { ok: true, value };
 }
 
+/**
+ * @param source 待检查的记录
+ * @param key 字段名
+ * @param label 拼进 reason 里的中文位置说明
+ * @returns 整数；`position` / `reps` 用它 —— 小数会让界面上的「第几组」错位
+ */
 function takeInteger(
   source: Record<string, unknown>,
   key: string,
@@ -161,6 +229,11 @@ function takeInteger(
  * 把一条原始记录规范化成具体实体：字段逐个对着 `domain/types.ts` 检查，
  * 只保留格式定义里的字段（多余的字段一律丢掉，不让脏数据透传到数据库）。
  * 字段顺序也与 `types.ts` 保持一致。
+ */
+/**
+ * @param raw `data.exercises` 里的第 index 项，类型未知
+ * @param index 从 0 开始的下标，**只用来拼「第 N 条」**（所以 reason 里写的是 `index + 1`）
+ * @returns 规范化后的 `Exercise`，只含格式定义里的字段
  */
 function normalizeExercise(raw: unknown, index: number): FieldResult<Exercise> {
   const label = `data.exercises 第 ${index + 1} 条`;
@@ -197,6 +270,12 @@ function normalizeExercise(raw: unknown, index: number): FieldResult<Exercise> {
   };
 }
 
+/**
+ * @param raw `data.sessions` 里的第 index 项
+ * @param index 从 0 开始的下标，用来拼「第 N 条」
+ * @returns 规范化后的 `WorkoutSession`；`finishedAt` 为 null 表示这是一场
+ *          进行中的训练 —— **合法，不拒绝**
+ */
 function normalizeSession(raw: unknown, index: number): FieldResult<WorkoutSession> {
   const label = `data.sessions 第 ${index + 1} 条`;
   if (!isPlainObject(raw)) {
@@ -226,6 +305,12 @@ function normalizeSession(raw: unknown, index: number): FieldResult<WorkoutSessi
   };
 }
 
+/**
+ * @param raw `data.sessionExercises` 里的第 index 项
+ * @param index 从 0 开始的下标，用来拼「第 N 条」
+ * @returns 规范化后的 `SessionExercise`；它引用的 sessionId/exerciseId
+ *          是否存在由 `validateBackup` 的引用完整性检查负责，这里只看类型
+ */
 function normalizeSessionExercise(
   raw: unknown,
   index: number,
@@ -258,6 +343,12 @@ function normalizeSessionExercise(
   };
 }
 
+/**
+ * @param raw `data.sets` 里的第 index 项
+ * @param index 从 0 开始的下标，用来拼「第 N 条」
+ * @returns 规范化后的 `SetEntry`；三个可空时间字段（`restSeconds` /
+ *          `restStartedAt` / `completedAt`）都允许 null
+ */
 function normalizeSet(raw: unknown, index: number): FieldResult<SetEntry> {
   const label = `data.sets 第 ${index + 1} 条`;
   if (!isPlainObject(raw)) {
@@ -325,6 +416,11 @@ function normalizeSet(raw: unknown, index: number): FieldResult<SetEntry> {
  *
  * 只查数组内部：四张表的主键互不相干，不同数组之间 id 同名是合法的。
  */
+/**
+ * @param items 同一个数组里的全部记录
+ * @param tableLabel 数组名，如 `data.exercises`，拼进 reason
+ * @returns 重复时返回中文理由（含 id 与两条的位置）；**没有重复时返回 null**
+ */
 function findDuplicateId(items: { id: string }[], tableLabel: string): string | null {
   const firstIndexById = new Map<string, number>();
   for (let i = 0; i < items.length; i += 1) {
@@ -338,6 +434,14 @@ function findDuplicateId(items: { id: string }[], tableLabel: string): string | 
   return null;
 }
 
+/**
+ * 取出一个数组字段并逐条规范化，**第一条出错就整体失败**（不做「跳过坏数据」）。
+ *
+ * @param data 备份的 `data` 对象
+ * @param key 数组的字段名
+ * @param normalize 单条记录的规范化函数（`normalizeExercise` 等）
+ * @returns 规范化后的数组；字段缺失或不是数组时失败
+ */
 function normalizeList<T>(
   data: Record<string, unknown>,
   key: string,
@@ -370,6 +474,13 @@ function normalizeList<T>(
  *   8. 同一个数组里 id 重复（引用完整性拦不住它，但导入时会撞主键）
  *   9. 引用完整性：孤儿 sessionExercise / 孤儿 set
  *  10. 通过时返回规范化对象，多余的字段不透传
+ */
+/**
+ * @param input `JSON.parse` 之后的任意值 —— 可能是图片、PDF、别的 App 的导出，
+ *              所以这里对**每一个字段**都不信任
+ * @returns 通过时给出**规范化后的**备份对象（多余字段已丢弃）：
+ *          `{ ok: true, backup }`；失败时给出可直接弹给用户的中文
+ *          `{ ok: false, reason }`。**永不抛异常**
  */
 export function validateBackup(input: unknown): BackupValidation {
   // 1. 顶层形状

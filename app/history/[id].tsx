@@ -16,6 +16,10 @@ const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周�
  * 和历史列表页 `app/(tabs)/history.tsx` 里的同名函数保持一致 —— 同一个日期在
  * 列表和详情里必须是同一种写法。只有这么几行，还没有第三个使用方，先不抽公共
  * 工具函数，免得为一个格式化多一层间接。
+ *
+ * @param timestamp 毫秒时间戳（`session.startedAt`）
+ * @returns 形如 `9月16日 周三`。刻意不带年份：这一页看的是近期的训练，
+ *   多一个年份只是噪音
  */
 function formatDate(timestamp: number): string {
   const date = new Date(timestamp);
@@ -35,14 +39,22 @@ function formatDate(timestamp: number): string {
  *
  * 安全区由 `app/_layout.tsx` 里给这个路由配的原生导航栏负责（`title: '训练详情'`），
  * 所以这一页不引入 `useSafeAreaInsets` —— 两套做法只能选一套，否则会双重留白。
+ *
+ * @returns 训练名 + 日期两行，下面接 `SessionSummaryView` 渲染的每一组与休息回顾
  */
 export default function HistoryDetailScreen() {
   const exec = useDatabase();
   const { id } = useLocalSearchParams<{ id: string }>();
 
+  // 只查训练本身，要的就是 `name` / `startedAt` 两个字段；组和休息回顾
+  // 由下面的 SessionSummaryView 自己按 id 查
   const [session, setSession] = useState<WorkoutSession | null>(null);
+  // 取过一次才置真。只判 `session === null` 不行 —— 一个查不到的 id 会和
+  // 「还在查」长得一模一样，那就没有东西能把标题区区分开了
   const [loaded, setLoaded] = useState(false);
 
+  // 按路由参数查这一场训练。`cancelled` 防的是快速返回再进另一场时，
+  // 先发的请求后到、把上一场的名字盖上去
   useEffect(() => {
     if (!id) {
       setLoaded(true);

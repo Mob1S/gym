@@ -1,19 +1,32 @@
 import type { SqlExecutor } from '../db/types';
 
+/**
+ * 进步页的原始点：一条**已完成**的组，连带它属于哪个动作、哪一场训练。
+ *
+ * 这个形状天然满足 `domain/progress.ts` 的 `SetPointInput`，因此可以直接
+ * 喂给 `buildProgressPoints` —— 仓储与 domain 之间不需要再有一层转换。
+ */
 export interface CompletedSetPoint {
+  /** 属于哪个动作；首屏查全部动作时一个结果里会混着多个动作 */
   exerciseId: string;
   sessionId: string;
+  /** 该场训练的开始时间，用作曲线横轴 */
   startedAt: number;
+  /** 重量（kg） */
   weight: number;
   reps: number;
 }
 
+/** 进步页首屏列表的一行：一个练过的动作 + 最近一次练它的时间 */
 export interface TrainedExercise {
   exerciseId: string;
+  /** 动作名，直接取自 `exercise` 表，免去界面再查一次 */
   name: string;
+  /** 最近一次**已结束**训练里练到它的时间，列表按它倒序 */
   lastTrainedAt: number;
 }
 
+/** 聚合查询的原始行（列名是 SQL 别名，转换见 `listCompletedSetPoints`） */
 interface CompletedSetRow {
   exercise_id: string;
   session_id: string;
@@ -38,6 +51,12 @@ interface CompletedSetRow {
  *
  * `ORDER BY` 里的 `s.rowid` 与 `st.position` 都不能省：`started_at` 只有毫秒
  * 精度，同一毫秒建的两场训练会完全并列，此时 SQLite 按扫描顺序返回，语义就反了。
+ */
+/**
+ * @param exec SQL 执行器
+ * @param exerciseId 只取这个动作的组；**省略则取全部动作**（首屏画迷你走势用）
+ * @returns 已完成组，按「训练时间升序 → 同场内按组序」排列 ——
+ *          这个顺序正是 `buildProgressPoints` 分组后需要的顺序
  */
 export async function listCompletedSetPoints(
   exec: SqlExecutor,
@@ -81,6 +100,11 @@ export async function listCompletedSetPoints(
  * 用聚合而不是「查完所有点再在 JS 里筛动作」，是因为这里只需要两个字段；
  * 但排序规则必须和 `listCompletedSetPoints` 的结果对得上 —— 两边都只认
  * 「已完成 + 已结束」，否则列表里会出现一个点都画不出来的动作。
+ */
+/**
+ * @param exec SQL 执行器
+ * @returns 练过的动作，最近的在前；同一时间并列时按动作名升序。
+ *          **没练过的动作不会出现**，因此界面不必为空点做兜底
  */
 export async function listTrainedExercises(
   exec: SqlExecutor,

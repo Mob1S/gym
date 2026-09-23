@@ -37,6 +37,12 @@ interface ExerciseGroup {
  *
  * `listExercises` 已经按「肌群顺序 + 拼音」排好了（排序逻辑在仓储层，
  * 界面不重排），所以这里只做相邻归并，不排序、不重排。
+ *
+ * @param exercises `listExercises` 的返回，顺序必须是它排好的那个顺序 ——
+ *   这个函数只在相邻两项之间归并，顺序一乱就会把同一个肌群切成好几段，
+ *   弹层里会出现一排重复的标题
+ * @returns 分段数据，每段自带标题；肌群为空的自定义动作会落在「其他」那一段里，
+ *   所以基本不会出现没有标题的一段
  */
 function groupByMuscleGroup(exercises: Exercise[]): ExerciseGroup[] {
   const groups: ExerciseGroup[] = [];
@@ -65,6 +71,13 @@ function groupByMuscleGroup(exercises: Exercise[]): ExerciseGroup[] {
  * 数据流全部经过 store 与仓储层：`completeCurrentSet` 会先把用户填的数值写库、
  * 再标记完成、再开始休息计时、并预建下一组 —— 也就是「完成即落盘」，中途杀掉
  * App 也不会丢已经做完的组。
+ *
+ * 路由参数 `id` 是 workout_session.id。从训练页跳进来时 store 里已经有这一场，
+ * 深链直接打开时 store 是空的，下面的 effect 会自己去库里把未结束的那场捞回来。
+ *
+ * @returns 四种界面之一，而且判断顺序不能调：休息计时屏 → 记录界面 →
+ *   「这次训练还没有动作」→「不存在或已结束」。每一道都在代码里写明了它为什么
+ *   必须排在前面
  */
 export default function SessionScreen() {
   const exec = useDatabase();
@@ -88,11 +101,17 @@ export default function SessionScreen() {
     endWorkout,
   } = useActiveSession();
 
+  // 这一组待填的数值。注意它**不是**已经记下的数 —— 点「完成这组」时才写库。
+  // 初值 20/8 只是兜底，真正该显示什么由下面那个预填 effect 决定
   const [weight, setWeight] = useState(20);
   const [reps, setReps] = useState(8);
+  // 「上次练这个动作」的那几组，用来提示「上次第 2 组：60 kg × 8」，
+  // 也用来推算这次打算练几组
   const [lastPerformance, setLastPerformance] = useState<SetEntry[]>([]);
   const [pickerVisible, setPickerVisible] = useState(false);
+  // 搜索框里的原始输入（未 trim）。空串即不过滤，全库平铺
   const [query, setQuery] = useState('');
+  // 动作库全表，只在弹层打开时读一次（见下面那个读它的 effect）
   const [allExercises, setAllExercises] = useState<Exercise[]>([]);
 
   // 收尾中：`endWorkout` 会立刻清空 store，而 `router.replace` 还在后面。
@@ -121,8 +140,16 @@ export default function SessionScreen() {
     };
   }, [exec, id, resume, session]);
 
+  // 当前聚焦的动作。`currentIndex` 归 store 管，点顶部动作条上任何一个 chip
+  // 或者 `addExercise` 都会改它
   const current = exercises[currentIndex];
+  // 当前动作的组。`?? []` 不是防御性编程意义上的兜底 —— 空状态（这场还没有动作）
+  // 会走到下面分支，这里先给出空数组，`current` 为 undefined 时下面几处
+  // `.find()` 才不用层层判空
   const currentSets = current?.sets ?? [];
+  // 当前该记的那一组：本动作里第一条还没完成的记录。它同时决定「第几组」的编号
+  // 和「完成这组」写进哪条记录 —— 找不到它 `completeCurrentSet` 会直接 return，
+  // 所以「加动作时预建第一组 / 完成时预建下一组」是硬需求
   const pending: SetEntry | undefined = useMemo(
     () => currentSets.find((s) => !s.isCompleted),
     [currentSets],
@@ -189,7 +216,11 @@ export default function SessionScreen() {
     };
   }, [exec, pickerVisible]);
 
+  // 过滤按「包含」而不是「前缀」：动作名多是「杠铃卧推」这类词组，用户更可能
+  // 只记得中间那两个字。先 trim 再比，否则结尾多打一个空格结果就全空了
   const trimmedQuery = query.trim();
+  // 过滤 + 分组每敲一个字重算一次。动作库是几十条的量级，这个代价比维护一份
+  // 增量索引小得多，也更不容易出错
   const visibleGroups = useMemo(() => {
     const matched = trimmedQuery
       ? allExercises.filter((e) => e.name.includes(trimmedQuery))
@@ -197,13 +228,34 @@ export default function SessionScreen() {
     return groupByMuscleGroup(matched);
   }, [allExercises, trimmedQuery]);
 
+  /**
+   * 打开动作选择弹层。顺手清空搜索词：留着上一次的残留，用户看到的会是一份
+   * 莫名其妙变短的列表，而搜索框里那几个字在小屏上未必一眼看得见。
+   *
+   * @returns 无返回值
+   */
   const openPicker = () => {
     setQuery('');
     setPickerVisible(true);
   };
 
+  /**
+   * 关掉弹层。选完动作、点取消、点背景、按 Android 返回键，四条路都汇到这里。
+   *
+   * @returns 无返回值
+   */
   const closePicker = () => setPickerVisible(false);
 
+  /**
+   * 选中一个动作：把它加进这场训练。
+   *
+   * 加失败时**不关弹层**。用户挑的动作没进去，关掉弹层只会让他以为加上了，
+   * 对着同一屏反复点；Alert 说明原因后把弹层留着，他可以直接重挑一个。
+   *
+   * @param exercise 用户点的那一项，来自动作库的 `exercise` —— 不是这一场里
+   *   已经存在的 sessionExercise
+   * @returns 无返回值；成功时关闭弹层，失败时保持打开
+   */
   const handlePickExercise = async (exercise: Exercise) => {
     try {
       // store 的 addExercise 会自动把 currentIndex 切到新动作，
@@ -377,6 +429,14 @@ export default function SessionScreen() {
     // 「换下一个动作」只有真的还有下一个动作时才切；没有就退化成开始下一组。
     // 两条路径都先 `beginNextSet` 把当前这段休息结掉（写入 rest_seconds），
     // 否则计时会一直悬着，这一段休息的时长永远不会落库。
+    /**
+     * 结束这段休息，然后（真的还有下一个动作时才）切过去。
+     *
+     * 结束休息失败就直接返回、不切动作：计时还悬着的时候跳走，这一段休息的
+     * 时长同样落不了库，而且用户会以为休息已经记完了。
+     *
+     * @returns 无返回值；当前已经是最后一个动作时停在原地，等价于「开始下一组」
+     */
     const handleSwitchExercise = async () => {
       try {
         await beginNextSet(exec);
@@ -410,11 +470,27 @@ export default function SessionScreen() {
     );
   }
 
+  // 下面几行都是现算的派生值，不另存 state：存了就要处处维护它和组同步，
+  // 而这点计算本身是零成本的
   const completedCount = currentSets.filter((s) => s.isCompleted).length;
+  // 组号从 1 开始，所以是「已完成数 + 1」
   const setNumber = completedCount + 1;
+  // 计划组数：上次练这个动作做几组就按几组显示；没有历史时给 3 组这个常见默认值，
+  // 用了 `||` 所以 0 也算没有
   const plannedSets = lastPerformance.length || 3;
+  // 「上次第 N 组」的数据源，按序号对齐（这次的第 2 组比上次的第 2 组）
   const lastSamePosition = lastPerformance[completedCount];
 
+  /**
+   * 「完成这组」：把当前填的数值写库、标记完成、开始休息计时、预建下一组 ——
+   * 四件事都在 store 的 `completeCurrentSet` 里一次做完（也就「完成即落盘」）。
+   *
+   * 写库失败必须弹窗并 return：这是落盘的唯一入口，静默失败会让用户以为这一组
+   * 已经记下了。Alert 不阻断后续操作，他可以直接再点一次。
+   *
+   * @returns 无返回值；成功后补一发轻振动作为「记下了」的即时反馈，
+   *   没有振动马达的设备上忽略
+   */
   const handleComplete = async () => {
     try {
       await completeCurrentSet(exec, weight, reps);
@@ -438,6 +514,15 @@ export default function SessionScreen() {
   // 总结页要按 finished_at 算时长，不能等用户在总结页点保存时才写。
   // 必须用对象形式导航：expo-router 的 typedRoutes 只生成
   // `/session/summary/[id]` 这个字面量，模板字符串过不了 tsc。
+  /**
+   * 「结束训练」：二次确认 → 写 finished_at → 换成总结页。
+   *
+   * 用 `replace` 而不是 `push`：结束过的训练不该留在返回栈里被退回来，
+   * 记录界面顶部那道「已结束」判断只是走深链进来时的兜底。
+   *
+   * @returns 无返回值。Alert 是异步的，这个函数立刻返回，不等用户点完；
+   *   真正的收尾在确认按钮的回调里
+   */
   const handleFinish = () => {
     Alert.alert('结束这次训练？', '已经记录的组都会保留。', [
       { text: '继续练', style: 'cancel' },

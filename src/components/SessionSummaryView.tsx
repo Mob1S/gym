@@ -9,16 +9,23 @@ import { getExercise } from '../repositories/exerciseRepo';
 import { getSession, listSessionExercises } from '../repositories/sessionRepo';
 import { listSets } from '../repositories/setRepo';
 
+/** 一个动作在这场训练里的汇总，界面上一一对应成一张卡片 */
 interface ExerciseSummary {
+  /** 动作名；动作记录查不到时退化成「未知动作」 */
   name: string;
   /** 已完成的组的次数，按组顺序。界面必须原样展示这个数组 */
   repsList: number[];
+  /** 已完成的组数；记录界面预建的占位组不算在内 */
   totalSets: number;
+  /** 总容量 = Σ(重量 × 次数)，单位 kg */
   volume: number;
+  /** 休息复盘结论；组数不足 3 组时为 null，界面显示「暂不判断」 */
   feedback: RestFeedback | null;
 }
 
+/** SessionSummaryView 的入参 */
 interface SessionSummaryViewProps {
+  /** 要回顾的那次训练的 id（`WorkoutSession.id`） */
   sessionId: string;
 }
 
@@ -37,14 +44,27 @@ interface SessionSummaryViewProps {
  * e1RM 在 v1 不显示（M4 才做），这里连算都不算。
  *
  * 组件只负责内容：滚动容器与安全区由使用它的页面负责（两个页面的外壳不同）。
+ *
+ * @param props.sessionId 要回顾的那次训练的 id。训练总结页传当前这场训练的 id，
+ *   历史详情页传列表里点进来的那一场 —— 同一个 id 渲染出来的必须是同一份东西
+ *
+ * 交互陷阱：组件只读不写，不会结束训练、不会改任何数据，也没有「关闭/返回」按钮，
+ * 那些都由外面的页面负责。sessionId 一变（包括首帧的空串）就重跑一遍加载。
  */
 export function SessionSummaryView({ sessionId }: SessionSummaryViewProps) {
+  // 数据库执行器。Provider 在库就绪之前不放行子树，所以这里拿到的一定非空，
+  // 不需要判空；它在整个 App 生命周期里只被赋值一次，不会引起下面的 effect 重跑。
   const exec = useDatabase();
 
+  // 训练本体，用来算时长（结束时间戳 − 开始时间戳）
   const [session, setSession] = useState<WorkoutSession | null>(null);
+  // 每个动作的汇总，只含已完成的组；空数组 = 这场训练一组都没练成
   const [summaries, setSummaries] = useState<ExerciseSummary[]>([]);
+  // 载入完成标记。没有它的话，空态文案「这次训练还没有完成的组」会先闪一下
   const [loaded, setLoaded] = useState(false);
 
+  // 按 sessionId 读一遍数据。cancelled 标记是为了防止旧的异步结果回来覆盖新数据
+  // —— 用户快速从一场训练翻到另一场时，先发的那个查询可能后返回。
   useEffect(() => {
     if (!sessionId) {
       setLoaded(true);
@@ -86,6 +106,8 @@ export function SessionSummaryView({ sessionId }: SessionSummaryViewProps) {
     };
   }, [exec, sessionId]);
 
+  // 三个统计数字从上面两份数据推出来：只要汇总或训练本体变了就重算一次，
+  // 不做第二份 state，免得两份数据对不上。
   const totals = useMemo(() => {
     const totalSets = summaries.reduce((n, s) => n + s.totalSets, 0);
     const volume = summaries.reduce((n, s) => n + s.volume, 0);

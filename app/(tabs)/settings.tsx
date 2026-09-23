@@ -12,10 +12,30 @@ import { useActiveSession } from '../../src/store/activeSession';
 /** 哪一件正在跑。用它同时禁用两个按钮 —— 导出和导入都要独占整库，不能并发 */
 type RunningTask = 'export' | 'import' | null;
 
+/**
+ * 设置页：备份的导出 / 导入，外加一段组间休息的参考区间。
+ *
+ * 这一页做的每件事都动整库（导出读全库、导入换全库），所以两个按钮共用一个
+ * `running` 互斥，任何一刻只允许跑一件。
+ *
+ * 休息参考区间只是一段静态文案：本 App 不做任何基于它的自动计算，
+ * 训练后的比较只看用户自己的次数变化。
+ *
+ * @returns 设置页
+ */
 export default function SettingsTab() {
   const exec = useDatabase();
   const [running, setRunning] = useState<RunningTask>(null);
 
+  /**
+   * 导出并分享一份备份文件。
+   *
+   * 失败要弹窗：分享面板没弹出来用户是看得见的，但「为什么」只有这里知道 ——
+   * 静默失败等于让他以为备份已经存好了。
+   *
+   * @returns 无返回值（Promise，供按钮直接调用）；无论成败都会在最后把
+   *   `running` 清掉，否则按钮会一直禁用着
+   */
   const handleExport = useCallback(async () => {
     // 按钮已经 disabled，这里再挡一道：`disabled` 要等一次重渲染才生效，
     // 手快连点两下时第二次点击可能赶在重渲染之前。
@@ -35,6 +55,16 @@ export default function SettingsTab() {
     }
   }, [exec, running]);
 
+  /**
+   * 选一个备份文件并整库导入。
+   *
+   * 导入成功之后必须把内存里的 `activeSession` 也清掉：导入是整库替换，
+   * 刚才那一场进行中的训练如果不在备份里，此刻已经被删了，
+   * 「继续上次训练」就会指向一条不存在的记录。
+   *
+   * @returns 无返回值；三种结局各自有反馈 —— 成功弹窗、失败弹窗、
+   *   用户主动取消什么都不弹
+   */
   const handleImport = useCallback(async () => {
     if (running !== null) return;
     setRunning('import');
@@ -63,6 +93,7 @@ export default function SettingsTab() {
     }
   }, [exec, running]);
 
+  // 用同一个布尔值同时禁用两个按钮：导出和导入都要独占整库，不能并发
   const busy = running !== null;
 
   return (

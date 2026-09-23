@@ -2,6 +2,15 @@ import { Stack } from 'expo-router';
 
 import { DatabaseProvider } from '../src/repositories/database';
 
+/**
+ * 全 App 唯一的根布局：套上 `DatabaseProvider`，再把五条路由挂进 `Stack`。
+ *
+ * 每条路由的 `headerShown` / `title` 在这里一次定死，而不是各页面自己去关 ——
+ * 记录页、总结页自绘了顶部内容，必须关掉导航栏；历史详情页、动作进度页顶部
+ * 只有一行文字，交给原生导航栏反而白拿返回手势与安全区处理。
+ *
+ * @returns 包着数据库上下文的路由栈
+ */
 export default function RootLayout() {
   return (
     <DatabaseProvider>

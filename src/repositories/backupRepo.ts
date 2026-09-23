@@ -24,6 +24,10 @@ import { SELECT_COLUMNS as SET_COLUMNS, toSetEntry, type SetRow } from './setRep
  */
 
 /** 布尔值要显式转成 0/1：SQLite 不认 JS 的 true/false */
+/**
+ * @param value 布尔值
+ * @returns 1 或 0，可直接当 SQL 参数绑定
+ */
 function flag(value: boolean): number {
   return value ? 1 : 0;
 }
@@ -35,6 +39,12 @@ function flag(value: boolean): number {
  * 历史列表用 `ORDER BY started_at DESC, rowid DESC` 排序，`started_at` 只有毫秒
  * 精度，同一毫秒建的两场训练谁在前**完全由插入顺序决定**。导出若按 id 之类的顺序
  * 排，恢复出来的历史顺序就会跟原来不一样。`rowid` 是唯一能还原「原来谁在前」的东西。
+ */
+/**
+ * @param exec SQL 执行器
+ * @returns 一份完整备份（`domain/backup.ts` 的 `buildBackup` 组装）；
+ *          **空库也会正常返回**，只是四个数组都是空的 —— 空备份是合法的，
+ *          导入它等于清空
  */
 export async function exportAll(exec: SqlExecutor): Promise<BackupFile> {
   const exercises = (
@@ -74,6 +84,13 @@ export async function exportAll(exec: SqlExecutor): Promise<BackupFile> {
  *
  * `position` 一律按备份里的值原样写入，**不重新编号** —— 重新编号会让「第几个动作」
  * 和用户记忆里的对不上。
+ */
+/**
+ * @param exec SQL 执行器
+ * @param backup **必须已经过 `validateBackup`** 的备份对象；本函数不再校验
+ * @returns 事务提交后 resolve
+ * @throws 任何一步失败时抛出**原始异常**（已回滚，库里数据未改动）。
+ *         回滚自身的异常会被吞掉，保证调用方拿到的始终是「为什么失败」
  */
 export async function importAll(exec: SqlExecutor, backup: BackupFile): Promise<void> {
   const { exercises, sessions, sessionExercises, sets } = backup.data;

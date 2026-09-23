@@ -10,7 +10,13 @@ interface RestTimerProps {
   onSwitchExercise: () => void;
 }
 
-/** 毫秒 → `MM:SS`。负数（时钟被回拨）按 0 处理，不做倒计时也不显示负号。 */
+/**
+ * 毫秒 → `MM:SS`。负数（时钟被回拨）按 0 处理，不做倒计时也不显示负号。
+ *
+ * @param ms 已经休息了多久，单位毫秒（`Date.now() − startedAt`）
+ * @returns 定长的 `MM:SS` 字符串，分和秒都补零。补零是为了让宽度恒定，
+ *   再配合样式里的 tabular-nums，秒数从 9 跳到 10 时整块数字不会左右抖
+ */
 function formatElapsed(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
   const minutes = Math.floor(total / 60);
@@ -28,6 +34,16 @@ function formatElapsed(ms: number): string {
  * `setInterval` 在这里只负责「催渲染」，不参与任何时间运算。
  *
  * 正计时、不设目标、不催人：练多久休息多久是用户自己的事。
+ *
+ * @param props.startedAt 本次休息开始的时间戳（ms，`SetEntry.restStartedAt`）。
+ *   每完成一组就会换一个新值，effect 靠它重新对齐
+ * @param props.justCompleted 刚完成那一组的重量（kg）与次数，只用来显示一行
+ *   「刚刚完成了什么」的确认文案，不参与计时
+ * @param props.onStartNextSet 点「开始下一组」时回调；结束休息、切到下一组的逻辑都在调用方
+ * @param props.onSwitchExercise 点「换下一个动作」时回调
+ *
+ * 交互陷阱：组件自己不结束休息、不写库、不设目标时长，只是把两个按钮的
+ * 点击转成回调 —— 谁把 startedAt 清掉，休息才算结束。
  */
 export function RestTimer({
   startedAt,
@@ -35,8 +51,12 @@ export function RestTimer({
   onStartNextSet,
   onSwitchExercise,
 }: RestTimerProps) {
+  // 只用来「催渲染」的当前时间戳：每次 tick 重新读一次系统时间，
+  // 中间漏掉多少 tick 都不影响显示结果（显示值永远是 now − startedAt）。
   const [now, setNow] = useState(() => Date.now());
 
+  // 依赖 startedAt：换一组休息时时间戳变了，必须重新对齐一次，
+  // 否则新一组会接着上一组的秒数继续往上走。定时器只在挂载/换组时重建。
   useEffect(() => {
     // 挂载时先对齐一次：本次渲染可能发生在 startedAt 之后很久
     // （比如从后台切回前台、或深链重进这一屏）。

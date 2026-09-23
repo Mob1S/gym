@@ -35,13 +35,31 @@ const DEFAULT_REPS = 8;
  */
 export type StartResult = 'started' | 'conflict';
 
+/**
+ * 记录界面上的一个动作卡片：动作本身 + 展示用的名字 + 它的全部组。
+ *
+ * 名字在这里就查好了（而不是让界面自己去 `getExercise`），因为 `activeSession`
+ * 本来就要为「上次练了多少」查一次库，顺手带上不额外花钱。
+ */
 export interface ActiveExercise {
+  /** 这一场里的动作记录 —— **`sets` 里的组引用的是它的 id** */
   sessionExercise: SessionExercise;
+  /** 动作名；动作被删/查不到时是「未知动作」 */
   exerciseName: string;
+  /** 该动作的全部组，含界面上那条未完成的占位组 */
   sets: SetEntry[];
 }
 
+/**
+ * 当前训练的全部状态与操作。
+ *
+ * 这一层是**唯一**允许判定「能不能改这场训练」的地方（每个写操作都先查
+ * `finishedAt !== null`）—— 界面只管调，不用自己判断训练是否已结束。
+ * 所有写操作都收一个 `exec`，而不是自己去 `useDatabase()`：store 在 React 之外，
+ * 拿不到 Context，让调用方传进来是唯一干净的做法。
+ */
 interface ActiveSessionState {
+  /** 正在从库里载入（`resume` 期间为 true），界面据此显示加载态 */
   loading: boolean;
   session: WorkoutSession | null;
   exercises: ActiveExercise[];
@@ -90,6 +108,12 @@ interface ActiveSessionState {
  * 放在这里而不是各个入口分别处理，是因为 `resume` / `startNew` / `addExercise`
  * / `endWorkout` 全都会经过它，一处覆盖全部。
  */
+/**
+ * @param exec SQL 执行器
+ * @param sessionId 要载入的训练
+ * @returns 动作卡片数组，顺序即 `position` 顺序。**训练没有任何动作时返回空数组**
+ *          （新训练的正常状态，界面显示「添加动作」引导）
+ */
 async function loadExercises(
   exec: SqlExecutor,
   sessionId: string,
@@ -116,7 +140,12 @@ async function loadExercises(
   return result;
 }
 
-/** 找出当前正在休息的那一组（已开始休息、还没结束） */
+/**
+ * 找出当前正在休息的那一组（已开始休息、还没结束）。
+ *
+ * @param sets 某个动作的组
+ * @returns 那一组；**没有在休息时返回 undefined**（调用方据此跳过 `endRest`）
+ */
 function findResting(sets: SetEntry[]): SetEntry | undefined {
   return sets.find((s) => s.isCompleted && s.restStartedAt !== null);
 }
@@ -131,6 +160,12 @@ function findResting(sets: SetEntry[]): SetEntry | undefined {
  *
  * `Math.max(0, …)` 兜住 `findIndex` 找不到时的 -1：直接拿去当 `currentIndex`
  * 会让记录界面取到 `exercises[-1]`，也就是一片空白。
+ */
+/**
+ * @param exec SQL 执行器
+ * @param sessionId 目标训练
+ * @param exercises 已经载入的动作数组（用来把 id 换回下标）
+ * @returns 该显示第几个动作，从 0 开始；**一组都没完成过时返回 0**（回到第一个动作）
  */
 async function resolveCurrentIndex(
   exec: SqlExecutor,
@@ -159,6 +194,12 @@ async function resolveCurrentIndex(
  * （用户手动加动作）共用同一条路径。两处各写一遍必然漂移，而漂移的后果
  * 正是上面那个「按钮没反应」—— 它不会报错，只会让用户以为 App 坏了。
  */
+/**
+ * @param exec SQL 执行器
+ * @param sessionId 目标训练
+ * @param exerciseId 要加的动作
+ * @returns 新建的 `SessionExercise`（挂在它下面的第一组也已建好）
+ */
 async function addExerciseWithFirstSet(
   exec: SqlExecutor,
   sessionId: string,
@@ -176,12 +217,26 @@ async function addExerciseWithFirstSet(
   return se;
 }
 
+/**
+ * 当前训练的 Zustand store。
+ *
+ * 状态**只存在内存里**，每个写操作都立刻落库，App 重启后靠 `resume` 从库重建。
+ * 刻意不做 store 持久化：真相来源只留 SQLite 一份，两处都能改状态必然对不上。
+ *
+ * 界面用法：`const { session, exercises } = useActiveSession()`。
+ * `exec` 不在 store 里 —— 组件从 `useDatabase()` 取，再作为参数传进来。
+ */
 export const useActiveSession = create<ActiveSessionState>((set, get) => ({
   loading: false,
   session: null,
   exercises: [],
   currentIndex: 0,
 
+  /**
+   * @param exec SQL 执行器
+   * @returns `true` = 确有未结束的训练、已连同动作与组装进 store；
+   *          `false` = 没有，store 保持原样
+   */
   resume: async (exec) => {
     set({ loading: true });
     try {
@@ -200,6 +255,12 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
     }
   },
 
+  /**
+   * @param exec SQL 执行器
+   * @param name 训练名，可为 null
+   * @returns `'started'` = 新建成功；`'conflict'` = **一个新记录都没建**，
+   *          已有那一场已经装进 store，等界面问用户怎么办
+   */
   startNew: async (exec, name) => {
     // 复用 `resume` 而不是另写一次查询：它会把那一场连动作带组一起装进 store，
     // 界面选「接着练」时直接导航过去就有东西可渲染 —— 只返回一个 id 的话，
@@ -232,6 +293,12 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
     return 'started';
   },
 
+  /**
+   * @param exec SQL 执行器
+   * @param exerciseId 要加进这场训练的动作
+   * @returns 加完并刷新 store 后 resolve；`currentIndex` 会跳到新加的那个动作。
+   *          训练已结束时**静默返回**，不抛错
+   */
   addExercise: async (exec, exerciseId) => {
     const { session } = get();
     // 已结束的训练不能再往里加东西。正常路径下 `endWorkout` 已经清空 store、
@@ -245,8 +312,23 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
     set({ exercises, currentIndex: exercises.length - 1 });
   },
 
+  /**
+   * 切换当前正在记录的动作（左右滑卡片时调用）。**不写数据库** —— 它是纯界面状态。
+   *
+   * @param index 目标动作在 `exercises` 里的下标；越界也不会崩，
+   *              后续各写操作会因为取不到当前动作而静默返回
+   */
   setCurrentIndex: (index) => set({ currentIndex: index }),
 
+  /**
+   * 记完当前这一组：写数值 → 标完成 → 起休息计时 → 预建下一组，四步都落盘。
+   *
+   * @param exec SQL 执行器
+   * @param weight 用户此刻填的重量（kg）—— 落盘的就是这个值，不是组里的旧值
+   * @param reps 用户此刻填的次数
+   * @returns 落盘并刷新 store 后 resolve。**以下情况静默返回**（都不报错）：
+   *          训练已结束、`currentIndex` 越界、该动作已无未完成的组（重复点击）
+   */
   completeCurrentSet: async (exec, weight, reps) => {
     const { session, exercises, currentIndex } = get();
     if (!session || session.finishedAt !== null) return;
@@ -275,6 +357,12 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
     set({ exercises: nextExercises });
   },
 
+  /**
+   * 结束休息、进入下一组：写入这段休息的秒数并清掉 `restStartedAt`。
+   *
+   * @param exec SQL 执行器
+   * @returns 结束后 resolve。当前没有在休息时只是刷新一下列表，不写库
+   */
   beginNextSet: async (exec) => {
     const { session, exercises, currentIndex } = get();
     if (!session || session.finishedAt !== null) return;
@@ -292,6 +380,12 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
     set({ exercises: nextExercises });
   },
 
+  /**
+   * 结束并**立刻清空** store（不是等总结页点完成，原因见函数内注释）。
+   *
+   * @param exec SQL 执行器
+   * @returns 被结束的那场训练的 id；**store 里本来就没有训练时返回 null**
+   */
   endWorkout: async (exec) => {
     const { session, exercises, currentIndex } = get();
     if (!session) return null;
@@ -318,5 +412,11 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
     return finishedId;
   },
 
+  /**
+   * 清空内存里的训练状态。**不碰数据库、不结束训练** ——
+   * 调用方要负责先 `finishSession`（`endWorkout` 已经这么做了）。
+   *
+   * @returns 无
+   */
   reset: () => set({ session: null, exercises: [], currentIndex: 0 }),
 }));

@@ -9,11 +9,18 @@
  * 参数写成结构化的最小形状（而不是 import store 的 `ActiveExercise`），
  * 是为了让 lib 不反过来依赖 store —— `ActiveExercise[]` 天然满足这个形状。
  */
+/** `describeExercises` 需要的**最小**形状：只需要动作名和每组是否完成 */
 export interface ExerciseProgress {
+  /** 动作名，用来拼「深蹲 等 3 个动作」里的第一个 */
   exerciseName: string;
+  /** 该动作下的组；只读 `isCompleted` 一个字段 */
   sets: { isCompleted: boolean }[];
 }
 
+/**
+ * @param exercises 这场训练已有的动作（顺序即界面顺序）
+ * @returns 形如 `深蹲 等 3 个动作 · 已记 12 组`；**一个动作都没有时返回「还没有动作」**
+ */
 export function describeExercises(exercises: ExerciseProgress[]): string {
   const completed = exercises.reduce(
     (sum, item) => sum + item.sets.filter((set) => set.isCompleted).length,

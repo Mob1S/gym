@@ -8,6 +8,7 @@ import { SEED_EXERCISES } from './seed';
  * 行映射必须是同一份，复制一份迟早会漂移，而漂移的表现是「导出的文件字段对不上」，
  * 极难排查。
  */
+/** `exercise` 表的原始行。布尔在库里是 0/1，转换见 `toExercise` */
 export interface ExerciseRow {
   id: string;
   name: string;
@@ -18,6 +19,12 @@ export interface ExerciseRow {
   created_at: number;
 }
 
+/**
+ * 行 → 实体。snake_case 转 camelCase，并把 0/1 还原成布尔。
+ *
+ * @param row `exercise` 表的行
+ * @returns 领域层的 `Exercise`
+ */
 export function toExercise(row: ExerciseRow): Exercise {
   return {
     id: row.id,
@@ -38,6 +45,11 @@ export const SELECT_COLUMNS = `
 /** 肌群的展示顺序。不在这个表里的肌群一律排到最后。 */
 const MUSCLE_GROUP_ORDER = ['胸', '背', '腿', '肩', '手臂', '核心'];
 
+/**
+ * @param group 肌群名
+ * @returns 它在展示顺序里的名次；**不在 `MUSCLE_GROUP_ORDER` 里的（含 null）
+ *          一律排到最后**，而不是排到最前
+ */
 function muscleGroupRank(group: string | null): number {
   const index = MUSCLE_GROUP_ORDER.indexOf(group ?? '');
   return index === -1 ? MUSCLE_GROUP_ORDER.length : index;
@@ -54,6 +66,12 @@ function muscleGroupRank(group: string | null): number {
  * 实测：SQLite 的 `name COLLATE NOCASE` / `name` / `name COLLATE BINARY` 三者结果
  * 与 JS 默认 `.sort()` 完全一致，与 `localeCompare('zh')` 全部不同。
  */
+/**
+ * @param a 待比较的动作
+ * @param b 待比较的动作
+ * @returns 负数/0/正数，语义同 `Array.prototype.sort` 的比较器：
+ *          先按肌群名次，同肌群再按名称的拼音序
+ */
 function compareExercises(a: Exercise, b: Exercise): number {
   const rankDiff =
     muscleGroupRank(a.muscleGroup) - muscleGroupRank(b.muscleGroup);
@@ -61,6 +79,14 @@ function compareExercises(a: Exercise, b: Exercise): number {
   return a.name.localeCompare(b.name, 'zh');
 }
 
+/**
+ * 列出全部**未归档**的动作，已按肌群 + 拼音排好序。
+ *
+ * 排序在 JS 里做而不是 SQL 里，原因见 `compareExercises` 的注释。
+ *
+ * @param exec SQL 执行器
+ * @returns 动作列表；空库时是空数组（正常流程下 `seedExercisesIfEmpty` 已播过种）
+ */
 export async function listExercises(exec: SqlExecutor): Promise<Exercise[]> {
   const rows = await exec.all<ExerciseRow>(
     `SELECT ${SELECT_COLUMNS} FROM exercise WHERE is_archived = 0`,
@@ -68,6 +94,14 @@ export async function listExercises(exec: SqlExecutor): Promise<Exercise[]> {
   return rows.map(toExercise).sort(compareExercises);
 }
 
+/**
+ * 按 id 取一个动作。
+ *
+ * @param exec SQL 执行器
+ * @param id `exercise.id`
+ * @returns 动作；**id 不存在时返回 null**。注意已归档的动作也能取到 ——
+ *          历史记录里引用着它，取不到就会显示成「未知动作」
+ */
 export async function getExercise(
   exec: SqlExecutor,
   id: string,
@@ -79,6 +113,18 @@ export async function getExercise(
   return row ? toExercise(row) : null;
 }
 
+/**
+ * 新建一个用户自建动作（`isCustom` 一律为 true，预置动作只能由播种写入）。
+ *
+ * 不做重名检查：动作库里本来就有「卧推 / 上斜卧推 / 窄距卧推」这类同名前缀，
+ * 判断重名比让用户自己看更烦人。
+ *
+ * @param exec SQL 执行器
+ * @param name 动作名，调用方需保证非空
+ * @param muscleGroup 肌群；null 表示未指定，会排到列表最后
+ * @param equipment 器械；null 表示未指定
+ * @returns 新建出来的实体（含已生成的 id 与 createdAt），**不再回头查库**
+ */
 export async function createCustomExercise(
   exec: SqlExecutor,
   name: string,
@@ -114,6 +160,10 @@ export async function createCustomExercise(
  * 只在动作表为空时写入预置动作。
  * 判断依据是「表里一个动作都没有」，而不是「表里没有预置动作」——
  * 用户如果自己先建了动作，就不该再塞一堆预置动作进去。
+ */
+/**
+ * @param exec SQL 执行器
+ * @returns 播种完成（或本来就非空、直接返回）后 resolve；无返回值
  */
 export async function seedExercisesIfEmpty(exec: SqlExecutor): Promise<void> {
   const row = await exec.first<{ count: number }>(

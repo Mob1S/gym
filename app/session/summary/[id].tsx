@@ -14,6 +14,11 @@ import { finishSession, getSession } from '../../../src/repositories/sessionRepo
  *
  * 内容本身（统计 + 休息回顾）在 `SessionSummaryView` 里，和历史详情页共用；
  * 这一屏只多一个「保存这次训练」按钮，负责结束训练并回到标签页。
+ *
+ * 路由参数 `id` 是 workout_session.id。它可能缺省（深链没带参数），这里不做
+ * 判断直接透传给 `SessionSummaryView`，那一层会自己渲染空态。
+ *
+ * @returns 统计 + 休息回顾，底部一个「完成」按钮
  */
 export default function SummaryScreen() {
   const exec = useDatabase();
@@ -25,8 +30,19 @@ export default function SummaryScreen() {
   // 历史详情页复用，那一页的外壳（导航栏 / 滚动容器）不一定和这里一样。
   const insets = useSafeAreaInsets();
 
+  // 提交中：把按钮置为禁用。`handleSave` 开头还有一道同步判断，挡的是
+  // disabled 生效之前的那第二下点击
   const [saving, setSaving] = useState(false);
 
+  /**
+   * 「完成」：补上可能漏写的结束时间，放掉屏幕常亮，回标签页。
+   *
+   * 不结束训练、不删记录 —— 这一步只是收尾，记录早在用户点「结束训练」时
+   * 就落盘了。
+   *
+   * @returns 无返回值；失败时弹窗说明原因并留在这一屏（按钮重新可点），
+   *   成功才真正离开
+   */
   const handleSave = async () => {
     if (saving) return;
     setSaving(true);

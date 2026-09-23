@@ -8,9 +8,21 @@ import { describeExercises } from '../../src/lib/sessionLabel';
 import { useDatabase } from '../../src/repositories/database';
 import { useActiveSession } from '../../src/store/activeSession';
 
+/**
+ * 训练标签页（首页）。
+ *
+ * 这一屏刻意只有两件事：开始一场新训练，或者接着练没做完的那一场。没有
+ * 进行中的训练时「继续」按钮根本不渲染，整屏就只剩一个主按钮 —— 越靠
+ * 健身房的场景，入口越不该需要找。
+ *
+ * 真正的记录界面在 `session/[id]`，这一页只负责「进哪一场」这个决策。
+ *
+ * @returns 首页；取数期间按钮禁用，但不会白屏
+ */
 export default function TrainTab() {
   const exec = useDatabase();
   const router = useRouter();
+  // 这一屏要用的 store 切片：进行中的训练、它的动作列表，以及三个会写库的动作
   const { session, exercises, loading, startNew, resume, endWorkout } =
     useActiveSession();
 
@@ -32,6 +44,15 @@ export default function TrainTab() {
     }
   }, [exec, resume, session]);
 
+  /**
+   * 进入某一场的记录界面。申请屏幕常亮放在这里而不是记录页内部：从别处深链
+   * 直接打开 `session/[id]` 时走的不是这条路，不会白白常亮一屏。
+   *
+   * 常亮申请是 fire-and-forget（`void`），失败也不该拦住导航 —— 拿不到常亮
+   * 总比点不动按钮强。
+   *
+   * @param id 目标训练的 id（workout_session.id，不是 exercise.id）
+   */
   const openSession = useCallback(
     (id: string) => {
       void keepScreenAwake();
@@ -43,11 +64,30 @@ export default function TrainTab() {
     [router],
   );
 
+  /**
+   * 打开 store 里当前那一场。刻意现读 `getState()` 而不是用组件里那个
+   * `session`：`handleStart` 里可能刚结束旧场、又新建一场，闭包里的
+   * `session` 还是上一次渲染的值，用它会把用户送回已经结束的那一场。
+   *
+   * @returns 无返回值；store 里没有训练时静默什么都不做
+   */
   const openCurrent = useCallback(async () => {
     const started = useActiveSession.getState().session;
     if (started) openSession(started.id);
   }, [openSession]);
 
+  /**
+   * 「开始训练」按钮：新建一场，撞上未结束的训练时改弹二选一。
+   *
+   * 第二个参数是训练名，传 `null` 表示「先不起名」（界面上显示「未命名训练」）。
+   * 至于练什么：`startNew` 自己会复制上一次训练的整张动作清单，第一次用 App
+   * 没有历史可复制时就是一场空训练，由记录页的「添加动作」接住。
+   *
+   * 弹窗那条分支不 await 用户的选择就返回了：按钮到此为止，接下来去哪一场
+   * 由用户点的那个按钮决定。
+   *
+   * @returns 无返回值
+   */
   const handleStart = useCallback(async () => {
     const result = await startNew(exec, null);
 

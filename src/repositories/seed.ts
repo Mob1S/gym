@@ -1,9 +1,16 @@
+/** 预置动作的模板。id 不写死 —— 播种时用 `newId()` 现生成，避免多设备撞 id */
 export interface SeedExercise {
   name: string;
   muscleGroup: string;
   equipment: string;
 }
 
+/**
+ * 预置动作表，按肌群分组书写，顺序与界面上的展示顺序一致。
+ *
+ * 只在**全新数据库**（`exercise` 表一行都没有）时写入一次，见
+ * `seedExercisesIfEmpty`。改动它不会影响已有用户的库 —— 他们已经播过种了。
+ */
 export const SEED_EXERCISES: SeedExercise[] = [
   // 腿
   { name: '深蹲', muscleGroup: '腿', equipment: '杠铃' },

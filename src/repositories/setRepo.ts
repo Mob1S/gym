@@ -7,6 +7,7 @@ import { newId } from '../lib/id';
  * 行映射必须是同一份，复制一份迟早会漂移，而漂移的表现是「导出的文件字段对不上」，
  * 极难排查。
  */
+/** `set_entry` 表的原始行。布尔与「是否在休息中」都靠 `null` 与否表达 */
 export interface SetRow {
   id: string;
   session_exercise_id: string;
@@ -19,6 +20,10 @@ export interface SetRow {
   completed_at: number | null;
 }
 
+/**
+ * @param row `set_entry` 表的行
+ * @returns 领域层的 `SetEntry`；`is_completed` 的 0/1 在这里还原成布尔
+ */
 export function toSetEntry(row: SetRow): SetEntry {
   return {
     id: row.id,
@@ -51,6 +56,18 @@ const SELECT_COLUMNS_PREFIXED = `
   st.is_completed, st.rest_seconds, st.rest_started_at, st.completed_at
 `;
 
+/**
+ * 追加一组，`position` 取当前最大值 +1（第一组是 0）。
+ *
+ * 新建出来的组**一律 `isCompleted: false`** —— 它是界面上的「下一组」占位。
+ * 「完成即落盘」的两步（`updateSetValues` → `completeSet`）发生在用户点完成时。
+ *
+ * @param exec SQL 执行器
+ * @param sessionExerciseId **`session_exercise.id`，不是 `exercise.id`**
+ * @param weight 初始重量（kg）；通常沿用上一组的值
+ * @param reps 初始次数；通常沿用上一组的值
+ * @returns 新建的实体，`restSeconds` / `restStartedAt` / `completedAt` 都是 null
+ */
 export async function addSet(
   exec: SqlExecutor,
   sessionExerciseId: string,
@@ -85,6 +102,14 @@ export async function addSet(
   return set;
 }
 
+/**
+ * 取某个动作（在这一场里）的全部组，含未完成的占位组 —— 界面正需要那条占位
+ * 来确定「当前该记哪一组」。
+ *
+ * @param exec SQL 执行器
+ * @param sessionExerciseId **`session_exercise.id`，不是 `exercise.id`**
+ * @returns 按 `position` 升序的组；一组都没有时是空数组
+ */
 export async function listSets(
   exec: SqlExecutor,
   sessionExerciseId: string,
@@ -108,6 +133,12 @@ export async function listSets(
  * 界面层的数据访问只能经过仓储层，store 也不例外。SQL 一旦散布到 store 里，
  * 将来加云同步就得同时改两处。
  */
+/**
+ * @param exec SQL 执行器
+ * @param setId `set_entry.id`
+ * @param weight 重量（kg）
+ * @param reps 次数
+ */
 export async function updateSetValues(
   exec: SqlExecutor,
   setId: string,
@@ -125,6 +156,12 @@ export async function updateSetValues(
  * 标记一组已完成。**这一步必须立刻落盘**——训练记录的全部价值就在于不丢，
  * 不能等训练结束再统一保存。
  */
+/**
+ * @param exec SQL 执行器
+ * @param setId `set_entry.id`
+ * @param completedAt 完成时刻的时间戳，由调用方传入（与休息计时共用同一个 now，
+ *                    保证「完成时刻」和「休息开始时刻」不差毫秒）
+ */
 export async function completeSet(
   exec: SqlExecutor,
   setId: string,
@@ -137,6 +174,11 @@ export async function completeSet(
 }
 
 /** 开始休息计时：只记时间戳，之后用「现在 − 这个时间戳」算时长 */
+/**
+ * @param exec SQL 执行器
+ * @param setId 刚完成的那一组
+ * @param at 休息开始的时间戳
+ */
 export async function startRest(
   exec: SqlExecutor,
   setId: string,
@@ -152,6 +194,13 @@ export async function startRest(
  * 结束休息计时，写入这段休息的秒数。
  * 必须基于 rest_started_at 做时间戳相减，而不是用计数器累加——
  * App 被系统挂起后计数器会停，时间戳不会。
+ */
+/**
+ * @param exec SQL 执行器
+ * @param setId 正在休息的那一组
+ * @param at 结束时刻的时间戳
+ * @returns 写完后 resolve。**该组本来就没在休息时静默返回**（不写、不抛）——
+ *          界面重复点「开始下一组」不会留下脏数据
  */
 export async function endRest(
   exec: SqlExecutor,
@@ -179,6 +228,10 @@ export async function endRest(
  * 的区别是刻意的：那种时长不是真实休息，不该作为数据留下来 —— 休息建议
  * 规则要算平均休息时长，一条 8 小时的记录足以把平均值彻底带偏。
  */
+/**
+ * @param exec SQL 执行器
+ * @param setId 那段跑过头的休息所属的组
+ */
 export async function cancelRest(
   exec: SqlExecutor,
   setId: string,
@@ -199,6 +252,13 @@ export async function cancelRest(
  * 都是 1789463457151）。此时只写 `ORDER BY s.started_at DESC`，SQLite 会按扫描
  * 顺序返回，也就是**先插入的那一场**——正是「更早」的那一场，语义整个反了。
  * rowid 就是插入顺序，用它兜底才能保证「取最新」。
+ */
+/**
+ * @param exec SQL 执行器
+ * @param exerciseId 动作库里的动作 id（不是 `session_exercise.id`）
+ * @param beforeSessionId 当前这一场的 id，用来把本场排除掉
+ * @returns 上次练这个动作时的已完成组，按组序排列；**从没练过时是空数组**，
+ *          调用方据此回退到默认重量（`store` 里就是 `?? 20` 那条兜底）
  */
 export async function getLastPerformance(
   exec: SqlExecutor,

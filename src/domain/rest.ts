@@ -10,6 +10,11 @@ import type { SetEntry } from './types';
 export const STALE_REST_THRESHOLD_MS = 30 * 60 * 1000;
 
 /** 这段休息是否已经跑过头。`restStartedAt` 为 null 表示当前没在休息。 */
+/**
+ * @param restStartedAt 休息开始的时间戳；null 表示当前没在休息
+ * @param now 当前时间戳，由调用方传入（便于测试注入时间）
+ * @returns true 表示这段休息已经跑过头，应当被清理而不是记成真实休息
+ */
 export function isStaleRest(
   restStartedAt: number | null,
   now: number,
@@ -23,6 +28,12 @@ export function isStaleRest(
  *
  * 返回 `undefined` 表示：没有正在进行的休息，或正在进行的这段还算新鲜，
  * 两种情况调用方都应该什么都不做。
+ */
+/**
+ * @param sets 某个动作下的全部组
+ * @param now 当前时间戳
+ * @returns 那一组已经跑过头的记录；`undefined` 表示没有正在进行的休息、
+ *          或进行中的这段还算新鲜 —— 两种情况调用方都该什么都不做
  */
 export function findStaleRest(
   sets: SetEntry[],

@@ -32,6 +32,10 @@ import { getActiveSession, listSessions } from '../repositories/sessionRepo';
 export const CANCELED_MESSAGE = '已取消';
 
 /** 备份文件名带日期：用户会在「文件」或网盘里攒下好几份，没日期就分不清哪份是哪份 */
+/**
+ * @param exportedAt 备份里的导出时间戳（不是「现在」——两者必须同一个值）
+ * @returns 形如 `gym-backup-2026-09-21.json`
+ */
 function backupFileName(exportedAt: number): string {
   const date = new Date(exportedAt);
   const pad = (value: number) => String(value).padStart(2, '0');
@@ -40,7 +44,12 @@ function backupFileName(exportedAt: number): string {
   return `gym-backup-${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}.json`;
 }
 
-/** 底层异常的原始信息，作为括号里的细节附在人话后面 */
+/**
+ * 底层异常的原始信息，作为括号里的细节附在人话后面。
+ *
+ * @param error 捕到的任意值（**catch 到的不是 Error 是常态**，比如原生模块抛字符串）
+ * @returns 异常消息；不是 Error 时用 `String()` 兜底
+ */
 function detail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -51,6 +60,11 @@ function detail(error: unknown): string {
  * `cancelable: false` 不是可选项：Android 上点对话框外面或按返回键会把它关掉，
  * 而且**不触发任何按钮回调** —— 那样这个 Promise 永远不 resolve，界面上的按钮
  * 就会一直卡在「禁用 + 进行中」。宁可要求用户显式选一个。
+ */
+/**
+ * @param message 对话框正文：会用多少场替换当前多少场（由调用方拼好）
+ * @returns 用户点了「替换并导入」为 true，点「取消」为 false。
+ *          **不会一直挂着不 resolve** —— 见上方 `cancelable: false` 的说明
  */
 function confirmReplace(message: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -74,6 +88,13 @@ function confirmReplace(message: string): Promise<boolean> {
  *
  * 失败时抛异常（签名是 `Promise<void>`，没有地方放失败信息），但抛出的**必须是**已经
  * 翻译好的中文 `Error`，调用方直接 `error.message` 就能弹给用户。
+ */
+/**
+ * @param exec SQL 执行器
+ * @returns 分享面板关闭后 resolve
+ * @throws 读库失败、写文件失败、没有分享面板、面板打不开，四种情况各抛一条
+ *         已翻译好的中文 `Error`。**调用方直接读 `error.message` 弹给用户即可**，
+ *         不要再拼一层前缀
  */
 export async function shareBackup(exec: SqlExecutor): Promise<void> {
   let backup: BackupFile;
@@ -139,6 +160,12 @@ export async function shareBackup(exec: SqlExecutor): Promise<void> {
  *                                              ├─成功──▶ { ok:true, message: 已导入 N 场训练 }
  *                                              └─抛错──▶ 人话 + 「数据没有被改动」
  * ```
+ */
+/**
+ * @param exec SQL 执行器
+ * @returns `{ ok: true, message }` 表示已导入；`{ ok: false, message }` 覆盖
+ *          取消、选错文件、格式不合法、写入失败等全部失败路径。
+ *          调用方拿 `message !== CANCELED_MESSAGE` 判断该不该弹红字
  */
 export async function pickAndImportBackup(
   exec: SqlExecutor,

@@ -5,12 +5,17 @@ import { estimateOneRepMax, totalVolumeLoad } from './metrics';
  * 仓储层的 `CompletedSetPoint` 天然满足它。
  */
 export interface SetPointInput {
+  /** 这一组属于哪一场训练 —— 同一个 id 的组会被合并成曲线上的同一个点 */
   sessionId: string;
+  /** 该场训练的开始时间（毫秒时间戳），折算后用作点的 x 轴 */
   startedAt: number;
+  /** 该组重量（kg） */
   weight: number;
+  /** 该组次数 */
   reps: number;
 }
 
+/** 曲线上的一个点：**一场训练 = 一个点** */
 export interface ProgressPoint {
   sessionId: string;
   startedAt: number;
@@ -32,6 +37,11 @@ export interface ProgressPoint {
  *
  * e1RM 一律调用 `metrics.ts` 的 `estimateOneRepMax`，**公式不在这里重写**：
  * §5.4 规定公式一旦确定不得更改，代码上就落实成「只能有一份实现」。
+ */
+/**
+ * @param rows 某个动作（或全部动作）的**已完成**组；顺序无所谓，函数内部自己
+ *             按 `sessionId` 分组，传进来的组必须已经是 filtered 过的
+ * @returns 每场训练一个点，按 `startedAt` 升序；没有输入时返回空数组
  */
 export function buildProgressPoints(rows: SetPointInput[]): ProgressPoint[] {
   const bySession = new Map<string, SetPointInput[]>();
@@ -95,6 +105,10 @@ export type ProgressMetric = 'maxWeight' | 'volumeLoad' | 'oneRepMax';
  *
  * e1RM 那条线上「整场次数都 > 10」的那几次是 `null` —— 图上不画点、线直接连过去。
  * 绝不能 substitute 成 0：0 是「练得很差」，而事实是「这一场不适合换算」。
+ *
+ * @param points `buildProgressPoints` 的输出
+ * @param metric 取哪条曲线的值
+ * @returns 与 `points` **等长**的数值序列，可能含 `null`
  */
 export function toSeries(
   points: ProgressPoint[],
@@ -107,16 +121,23 @@ export function toSeries(
   });
 }
 
+/** 一个「历史最好」及其出处。`at` 是该场的开始时间，卡片上据此写日期 */
 export interface BestMark<T> {
+  /** 历史最好的那个值 */
   value: T;
+  /** 出现在哪一场（该场的 `startedAt`） */
   at: number;
 }
 
+/** 进步页三张卡头上的数字。每一项都在「一场都没练」时为 null */
 export interface ProgressSummary {
+  /** 历史最重的一组 */
   maxWeight: BestMark<number> | null;
+  /** 历史最好的估算 1RM；`from` 说明这个值来自哪一组（卡片上写「来自 60 kg × 10」） */
   bestOneRepMax:
     | (BestMark<number> & { from: { weight: number; reps: number } })
     | null;
+  /** 单场容量负荷的最高值 */
   maxVolumeLoad: BestMark<number> | null;
   /** 有几场训练算不出 e1RM，用来在图下写那句说明 */
   missingOneRepMaxCount: number;
@@ -125,6 +146,11 @@ export interface ProgressSummary {
 /**
  * 三张卡头上的数字。**全部是历史最好，不加时间窗** —— 用户当前数据量还小，
  * 加「最近 90 天」只会让他以为自己退步了。
+ */
+/**
+ * @param points `buildProgressPoints` 的输出（顺序不影响结果）
+ * @returns 三个「历史最好」+ 算不出 e1RM 的场次；空输入时三个最好值都是 null、
+ *          计数为 0，界面据此显示空态
  */
 export function summarizeProgress(points: ProgressPoint[]): ProgressSummary {
   let maxWeight: BestMark<number> | null = null;
