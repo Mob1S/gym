@@ -1,19 +1,18 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text } from 'react-native';
-
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Alert, ScrollView } from 'react-native';
 
 import { SessionSummaryView } from '../../../src/components/SessionSummaryView';
 import { releaseScreenAwake } from '../../../src/lib/keepAwake';
 import { useDatabase } from '../../../src/repositories/database';
 import { finishSession, getSession } from '../../../src/repositories/sessionRepo';
+import { Button, Screen, space } from '../../../src/ui';
 
 /**
  * 训练总结页：一次训练结束后，把统计数字和「组间休息回顾」摊开给用户看。
  *
  * 内容本身（统计 + 休息回顾）在 `SessionSummaryView` 里，和历史详情页共用；
- * 这一屏只多一个「保存这次训练」按钮，负责结束训练并回到标签页。
+ * 这一屏只多一个「完成」按钮，负责结束训练并回到标签页。
  *
  * 路由参数 `id` 是 workout_session.id。它可能缺省（深链没带参数），这里不做
  * 判断直接透传给 `SessionSummaryView`，那一层会自己渲染空态。
@@ -24,11 +23,6 @@ export default function SummaryScreen() {
   const exec = useDatabase();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-
-  // 这个路由在 app/_layout.tsx 里设了 headerShown: false，没有导航栏帮忙让出
-  // 状态栏，所以必须自己用 insets 把内容压下来。安全区归页面管：组件还要被
-  // 历史详情页复用，那一页的外壳（导航栏 / 滚动容器）不一定和这里一样。
-  const insets = useSafeAreaInsets();
 
   // 提交中：把按钮置为禁用。`handleSave` 开头还有一道同步判断，挡的是
   // disabled 生效之前的那第二下点击
@@ -70,42 +64,26 @@ export default function SummaryScreen() {
   };
 
   return (
-    <ScrollView
-      style={styles.screen}
-      contentContainerStyle={[
-        styles.container,
-        {
-          paddingTop: insets.top + 12,
-          paddingBottom: insets.bottom + 20,
-        },
-      ]}
-    >
-      <SessionSummaryView sessionId={id} />
-
-      <Pressable
-        style={[styles.saveButton, saving ? styles.saveButtonDisabled : null]}
-        onPress={() => {
-          void handleSave();
+    // 安全区归 `Screen` 管：这一屏是 headerShown: false，没有导航栏帮忙让出状态栏
+    <Screen padded={false}>
+      <ScrollView
+        contentContainerStyle={{
+          paddingHorizontal: 20,
+          paddingTop: space.md,
+          gap: space.lg,
         }}
-        disabled={saving}
       >
-        <Text style={styles.saveButtonText}>完成</Text>
-      </Pressable>
-    </ScrollView>
+        <SessionSummaryView sessionId={id} />
+
+        <Button
+          label="完成"
+          onPress={() => {
+            void handleSave();
+          }}
+          loading={saving}
+          style={{ marginTop: space.sm }}
+        />
+      </ScrollView>
+    </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#fff' },
-  container: { padding: 20, gap: 14 },
-
-  saveButton: {
-    backgroundColor: '#16181d',
-    borderRadius: 14,
-    paddingVertical: 16,
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  saveButtonDisabled: { opacity: 0.5 },
-  saveButtonText: { color: '#fff', fontSize: 17, fontWeight: '700' },
-});

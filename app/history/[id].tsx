@@ -1,11 +1,12 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, View } from 'react-native';
 
 import { SessionSummaryView } from '../../src/components/SessionSummaryView';
 import type { WorkoutSession } from '../../src/domain/types';
 import { useDatabase } from '../../src/repositories/database';
 import { getSession } from '../../src/repositories/sessionRepo';
+import { Screen, Text, space } from '../../src/ui';
 
 /** 下标即 `getDay()` 的返回值：0 = 周日，1 = 周一 …… 6 = 周六 */
 const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
@@ -73,27 +74,29 @@ export default function HistoryDetailScreen() {
   }, [exec, id]);
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.container}>
-      {/* 数据没回来之前不渲染标题：否则会先闪一下「未命名训练」再被真名顶掉 */}
-      {loaded ? (
-        <View style={styles.header}>
-          <Text style={styles.name}>{session?.name ?? '未命名训练'}</Text>
-          {session ? (
-            <Text style={styles.date}>{formatDate(session.startedAt)}</Text>
-          ) : null}
-        </View>
-      ) : null}
+    <Screen edgeToEdgeTop={false} padded={false}>
+      <ScrollView
+        contentContainerStyle={{
+          paddingHorizontal: 20,
+          paddingTop: space.md,
+          paddingBottom: space.xxl,
+          gap: space.lg,
+        }}
+      >
+        {/* 数据没回来之前不渲染标题：否则会先闪一下「未命名训练」再被真名顶掉 */}
+        {loaded ? (
+          <View style={{ gap: space.xs }}>
+            <Text variant="h2">{session?.name ?? '未命名训练'}</Text>
+            {session ? (
+              <Text variant="caption" color="textMuted">
+                {formatDate(session.startedAt)}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
 
-      <SessionSummaryView sessionId={id} />
-    </ScrollView>
+        <SessionSummaryView sessionId={id} />
+      </ScrollView>
+    </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#fff' },
-  container: { padding: 20, paddingBottom: 32, gap: 14 },
-
-  header: { gap: 4 },
-  name: { fontSize: 22, fontWeight: '700' },
-  date: { fontSize: 13, color: '#8a8f98' },
-});

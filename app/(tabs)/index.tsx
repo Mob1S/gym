@@ -1,19 +1,23 @@
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, View } from 'react-native';
 
 import { formatDateTime } from '../../src/lib/format';
 import { keepScreenAwake } from '../../src/lib/keepAwake';
 import { describeExercises } from '../../src/lib/sessionLabel';
 import { useDatabase } from '../../src/repositories/database';
 import { useActiveSession } from '../../src/store/activeSession';
+import { Button, Card, Screen, Text, space } from '../../src/ui';
 
 /**
  * 训练标签页（首页）。
  *
  * 这一屏刻意只有两件事：开始一场新训练，或者接着练没做完的那一场。没有
- * 进行中的训练时「继续」按钮根本不渲染，整屏就只剩一个主按钮 —— 越靠
- * 健身房的场景，入口越不该需要找。
+ * 进行中的训练时，「继续」那块根本不渲染 —— 越靠健身房的场景，入口越不该需要找。
+ *
+ * 有进行中的训练时，**「继续」是唯一的主按钮**（橙色实底），「开始新训练」降级成
+ * 次级按钮。这个主次关系很重要：从裤兜里掏出手机的那一刻，用户要的是回到刚才那场，
+ * 而不是新开一场。
  *
  * 真正的记录界面在 `session/[id]`，这一页只负责「进哪一场」这个决策。
  *
@@ -133,60 +137,46 @@ export default function TrainTab() {
   }, [endWorkout, exec, openCurrent, openSession, startNew]);
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>训练</Text>
+    <Screen>
+      <View style={{ paddingTop: space.xl, paddingBottom: space.lg }}>
+        <Text variant="h1">训练</Text>
+      </View>
 
-      {current ? (
-        <Pressable
-          style={styles.primaryButton}
-          onPress={() => openSession(current.id)}
-        >
-          <Text style={styles.primaryButtonText}>
-            继续 {formatDateTime(current.startedAt)} 的训练
+      {/* 主次关系全在这一段：有未结束的训练时它排在前面、用主按钮 */}
+      <View style={{ gap: space.lg }}>
+        {current ? (
+          <Card highlighted>
+            <Text variant="label" color="textMuted">
+              进行中
+            </Text>
+            <Text
+              variant="h2"
+              style={{ marginTop: space.xs, marginBottom: space.xs }}
+            >
+              {formatDateTime(current.startedAt)}
+            </Text>
+            <Button
+              label="继续训练"
+              detail={describeExercises(exercises)}
+              onPress={() => openSession(current.id)}
+              style={{ marginTop: space.sm }}
+            />
+          </Card>
+        ) : null}
+
+        <Button
+          label={current ? '开始新训练' : '开始训练'}
+          variant={current ? 'secondary' : 'primary'}
+          onPress={handleStart}
+          loading={loading}
+        />
+
+        {!current ? (
+          <Text variant="caption" color="textMuted" style={{ textAlign: 'center' }}>
+            会沿用上次的动作清单，直接接着练
           </Text>
-          <Text style={styles.resumeDetail}>{describeExercises(exercises)}</Text>
-        </Pressable>
-      ) : null}
-
-      <Pressable
-        style={[styles.primaryButton, current ? styles.secondaryButton : null]}
-        onPress={handleStart}
-        disabled={loading}
-      >
-        <Text
-          style={[
-            styles.primaryButtonText,
-            current ? styles.secondaryButtonText : null,
-          ]}
-        >
-          {current ? '开始新训练' : '开始训练'}
-        </Text>
-      </Pressable>
-    </View>
+        ) : null}
+      </View>
+    </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 16,
-    padding: 24,
-  },
-  title: { fontSize: 24, fontWeight: '700', marginBottom: 8 },
-  primaryButton: {
-    backgroundColor: '#2b7fff',
-    borderRadius: 12,
-    paddingVertical: 16,
-    paddingHorizontal: 32,
-    minWidth: 220,
-    alignItems: 'center',
-    gap: 4,
-  },
-  primaryButtonText: { color: '#fff', fontSize: 17, fontWeight: '700' },
-  // 「继续」按钮上的第二行：说明这一场练到哪了，用半透明白压在主色上
-  resumeDetail: { color: 'rgba(255,255,255,0.85)', fontSize: 13 },
-  secondaryButton: { backgroundColor: '#eceef2' },
-  secondaryButtonText: { color: '#4b5058' },
-});

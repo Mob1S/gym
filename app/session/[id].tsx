@@ -7,13 +7,9 @@ import {
   Modal,
   Pressable,
   ScrollView,
-  StyleSheet,
-  Text,
   TextInput,
   View,
 } from 'react-native';
-
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { DragNumber } from '../../src/components/DragNumber';
 import { RestTimer } from '../../src/components/RestTimer';
@@ -23,6 +19,19 @@ import { useDatabase } from '../../src/repositories/database';
 import { listExercises } from '../../src/repositories/exerciseRepo';
 import { getLastPerformance } from '../../src/repositories/setRepo';
 import { useActiveSession } from '../../src/store/activeSession';
+import {
+  Button,
+  Pill,
+  Screen,
+  Text,
+  border,
+  fontSize,
+  radius,
+  space,
+  tracking,
+  usePalette,
+  weight,
+} from '../../src/ui';
 
 /** 肌群为空的自定义动作归到这一组，避免列表里出现没有标题的一段 */
 const UNGROUPED_LABEL = '其他';
@@ -85,9 +94,13 @@ export default function SessionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
 
   // 这个路由在 app/_layout.tsx 里设了 headerShown: false，导航栏不再替我们
-  // 让出状态栏，所以必须自己把内容压到状态栏下面 —— 否则顶部动作条会和
+  // 让出状态栏，所以下面的 `Screen` 会自动补上顶部内边距 —— 否则顶部动作条会和
   // 信号、时钟、运营商文字叠在一起。
-  const insets = useSafeAreaInsets();
+
+  // 绑定了当前主题的样式。必须在这一屏的顶层调用一次，四个早返回分支共用它
+  const styles = useSessionStyles();
+  // 弹层里搜索框的占位文字色也要跟主题走，所以在这里也取一份 palette
+  const palette = usePalette();
 
   const {
     session,
@@ -290,13 +303,17 @@ export default function SessionScreen() {
         <Pressable style={styles.modalBackdrop} onPress={closePicker} />
         <View style={styles.sheet}>
           <View style={styles.sheetHeader}>
-            <Text style={styles.sheetTitle}>选择动作</Text>
+            <Text variant="title" style={styles.sheetTitle}>
+              选择动作
+            </Text>
             <Pressable
               style={styles.sheetCancel}
               onPress={closePicker}
               accessibilityLabel="取消"
             >
-              <Text style={styles.sheetCancelText}>取消</Text>
+              <Text variant="body" style={styles.sheetCancelText}>
+                取消
+              </Text>
             </Pressable>
           </View>
 
@@ -305,7 +322,8 @@ export default function SessionScreen() {
             value={query}
             onChangeText={setQuery}
             placeholder="搜索动作名称"
-            placeholderTextColor="#a8adb5"
+            // 占位文字必须跟着主题走，否则浅色主题下会是几乎看不见的白
+            placeholderTextColor={palette.textFaint}
             returnKeyType="search"
             autoCorrect={false}
           />
@@ -316,7 +334,9 @@ export default function SessionScreen() {
             keyboardShouldPersistTaps="handled"
             renderItem={({ item: group }) => (
               <View>
-                <Text style={styles.groupTitle}>{group.title}</Text>
+                <Text variant="label" style={styles.groupTitle}>
+                  {group.title}
+                </Text>
                 {group.data.map((exercise) => (
                   <Pressable
                     key={exercise.id}
@@ -325,7 +345,9 @@ export default function SessionScreen() {
                       void handlePickExercise(exercise);
                     }}
                   >
-                    <Text style={styles.optionText}>{exercise.name}</Text>
+                    <Text variant="body" style={styles.optionText}>
+                      {exercise.name}
+                    </Text>
                   </Pressable>
                 ))}
               </View>
@@ -344,31 +366,26 @@ export default function SessionScreen() {
   );
 
   if (finishing) {
-    // 一帧的白屏，紧接着就是总结页
+    // 一帧的空白，紧接着就是总结页
     return <View style={styles.container} />;
   }
 
+  // 下面三个分支共用同一个外壳：主题背景 + 状态栏 + 安全区都由 `Screen` 负责，
+  // 这里只描述内容。三处原本各写一遍内边距算式，少写一处就会顶进状态栏。
   if (!session || session.id !== id) {
     return (
-      <View
-        style={[
-          styles.container,
-          styles.emptyContainer,
-          { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 20 },
-        ]}
-      >
-        <Text style={styles.hint}>
+      <Screen style={styles.emptyContainer}>
+        <Text variant="title" color="textMuted" style={{ textAlign: 'center' }}>
           {loadState === 'loading' ? '载入中…' : '这场训练不存在或已结束'}
         </Text>
         {loadState === 'missing' ? (
-          <Pressable
-            style={styles.completeButton}
+          <Button
+            label="回主页"
             onPress={() => router.replace('/(tabs)')}
-          >
-            <Text style={styles.completeButtonText}>回主页</Text>
-          </Pressable>
+            fullWidth={false}
+          />
         ) : null}
-      </View>
+      </Screen>
     );
   }
 
@@ -377,21 +394,16 @@ export default function SessionScreen() {
   // 之前同一场训练被接上第二次、第三次，靠的就是这里没有这道判断。
   if (session.finishedAt !== null) {
     return (
-      <View
-        style={[
-          styles.container,
-          styles.emptyContainer,
-          { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 20 },
-        ]}
-      >
-        <Text style={styles.hint}>这场训练已经结束</Text>
-        <Pressable
-          style={styles.completeButton}
+      <Screen style={styles.emptyContainer}>
+        <Text variant="title" color="textMuted" style={{ textAlign: 'center' }}>
+          这场训练已经结束
+        </Text>
+        <Button
+          label="回主页"
           onPress={() => router.replace('/(tabs)')}
-        >
-          <Text style={styles.completeButtonText}>回主页</Text>
-        </Pressable>
-      </View>
+          fullWidth={false}
+        />
+      </Screen>
     );
   }
 
@@ -400,24 +412,16 @@ export default function SessionScreen() {
   // 和记录界面一样自己让出状态栏：这个路由是 headerShown: false。
   if (!current) {
     return (
-      <View
-        style={[
-          styles.container,
-          styles.emptyContainer,
-          { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 20 },
-        ]}
-      >
-        <Text style={styles.hint}>这次训练还没有动作</Text>
-        <Text style={styles.emptyTip}>添加一个动作就可以开始记录了</Text>
-        <Pressable
-          style={styles.completeButton}
-          onPress={openPicker}
-          accessibilityLabel="添加动作"
-        >
-          <Text style={styles.completeButtonText}>＋　添加动作</Text>
-        </Pressable>
+      <Screen style={styles.emptyContainer}>
+        <Text variant="title" color="textMuted" style={{ textAlign: 'center' }}>
+          这次训练还没有动作
+        </Text>
+        <Text variant="caption" color="textFaint" style={{ textAlign: 'center' }}>
+          添加一个动作就可以开始记录了
+        </Text>
+        <Button label="＋　添加动作" onPress={openPicker} accessibilityLabel="添加动作" />
         {pickerModal}
-      </View>
+      </Screen>
     );
   }
 
@@ -450,12 +454,7 @@ export default function SessionScreen() {
 
     return (
       // 顶部同样让出状态栏：这个路由是 headerShown: false，没有导航栏帮忙。
-      <View
-        style={[
-          styles.container,
-          { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 20 },
-        ]}
-      >
+      <Screen style={styles.container}>
         <RestTimer
           startedAt={startedAt}
           justCompleted={{ weight: restingSet.weight, reps: restingSet.reps }}
@@ -466,7 +465,7 @@ export default function SessionScreen() {
             void handleSwitchExercise();
           }}
         />
-      </View>
+      </Screen>
     );
   }
 
@@ -550,45 +549,35 @@ export default function SessionScreen() {
   };
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top + 12 }]}>
+    <Screen style={styles.container}>
       <View style={styles.chipBarWrapper}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.chipBar}
         >
-          {exercises.map((item, index) => {
-            const active = index === currentIndex;
-            return (
-              <Pressable
-                key={item.sessionExercise.id}
-                style={[styles.chip, active && styles.chipActive]}
-                onPress={() => setCurrentIndex(index)}
-                accessibilityState={{ selected: active }}
-              >
-                <Text
-                  style={[styles.chipText, active && styles.chipTextActive]}
-                  numberOfLines={1}
-                >
-                  {item.exerciseName}
-                </Text>
-              </Pressable>
-            );
-          })}
-          <Pressable
-            style={[styles.chip, styles.chipAdd]}
-            onPress={openPicker}
-            accessibilityLabel="添加动作"
-          >
-            <Text style={styles.chipAddText}>＋</Text>
-          </Pressable>
+          {exercises.map((item, index) => (
+            <Pill
+              key={item.sessionExercise.id}
+              label={item.exerciseName}
+              selected={index === currentIndex}
+              onPress={() => setCurrentIndex(index)}
+            />
+          ))}
+          {/* 「加动作」做成同样大小的药丸：它和动作名是同一类东西（这一场里
+              有哪些动作），排在一起才读得懂 */}
+          <Pill label="＋" onPress={openPicker} accessibilityLabel="添加动作" />
         </ScrollView>
       </View>
 
       <View style={styles.setRow}>
-        <Text style={styles.setNumber}>第 {setNumber} 组</Text>
+        <Text variant="numeric" style={styles.setNumber}>
+          第 {setNumber} 组
+        </Text>
         {setNumber <= plannedSets ? (
-          <Text style={styles.setPlanned}>共 {plannedSets} 组</Text>
+          <Text variant="caption" style={styles.setPlanned}>
+            共 {plannedSets} 组
+          </Text>
         ) : null}
       </View>
 
@@ -605,10 +594,12 @@ export default function SessionScreen() {
         <DragNumber label="次数" value={reps} step={1} min={1} onChange={setReps} />
       </View>
 
-      <Text style={styles.dragHint}>← 左右拖动数字调整 →</Text>
+      <Text variant="label" style={styles.dragHint}>
+        ← 左右拖动数字调整 →
+      </Text>
 
       {lastSamePosition ? (
-        <Text style={styles.lastHint}>
+        <Text variant="caption" style={styles.lastHint}>
           上次第 {completedCount + 1} 组：{lastSamePosition.weight} kg ×{' '}
           {lastSamePosition.reps}
         </Text>
@@ -625,107 +616,159 @@ export default function SessionScreen() {
         <Stepper label="次数" value={reps} step={1} min={1} onChange={setReps} />
       </View>
 
-      <Pressable style={styles.completeButton} onPress={handleComplete}>
-        <Text style={styles.completeButtonText}>✓　完成这组</Text>
-      </Pressable>
+      <Button label="✓　完成这组" onPress={handleComplete} />
 
-      <Pressable style={styles.finishButton} onPress={handleFinish}>
-        <Text style={styles.finishButtonText}>结束训练</Text>
-      </Pressable>
+      {/* 「结束训练」用 ghost：它低频、且误触代价高，不该和主按钮抢注意力 */}
+      <Button label="结束训练" variant="ghost" onPress={handleFinish} />
 
       {/* 与空状态共用同一个弹层实例定义 */}
       {pickerModal}
-    </View>
+    </Screen>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 20, gap: 10, backgroundColor: '#fff' },
-  hint: { textAlign: 'center', color: '#8a8f98', marginTop: 40 },
+/**
+ * 这一屏用到的全部样式。
+ *
+ * **写成 hook 而不是模块级的 `StyleSheet.create`**：颜色现在来自主题，而主题在
+ * 运行时才定（跟随系统明暗）。模块级常量在模块加载时就固化了，拿不到主题。
+ *
+ * 布局类样式（间距、方向、对齐）走 `src/ui` 的 token；只有颜色取自 palette。
+ * 这样「间距用 4 的倍数、颜色只有主题里有」两条规则在这一屏也成立。
+ *
+ * @returns 绑定了当前主题的样式对象
+ */
+function useSessionStyles() {
+  const palette = usePalette();
 
-  // 空状态：内容整体居中，「添加动作」按钮做成整宽的实心主按钮 —— 这一屏
-  // 只有这一个出口，它必须一眼可见、单手够得着。
-  emptyContainer: { justifyContent: 'center' },
-  emptyTip: { textAlign: 'center', color: '#a8adb5', fontSize: 13 },
+  return useMemo(
+    () => ({
+      container: {
+        flex: 1,
+        backgroundColor: palette.bg,
+        paddingHorizontal: space.lg,
+        paddingBottom: space.xl,
+        gap: space.sm,
+      },
+      // 空状态：内容整体居中，「添加动作」按钮整宽实心 —— 这一屏只有这一个
+      // 出口，它必须一眼可见、单手够得着。
+      emptyContainer: { justifyContent: 'center' as const, gap: space.md },
 
-  // 顶部动作条：横向滚动，当前动作高亮
-  chipBarWrapper: { marginHorizontal: -16 },
-  chipBar: { paddingHorizontal: 16, gap: 8, alignItems: 'center' },
-  chip: {
-    maxWidth: 180,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: '#eceef2',
-  },
-  chipActive: { backgroundColor: '#2b7fff' },
-  chipText: { fontSize: 14, fontWeight: '600', color: '#4b5058' },
-  chipTextActive: { color: '#fff' },
-  chipAdd: { paddingHorizontal: 16 },
-  chipAddText: { fontSize: 16, fontWeight: '800', color: '#4b5058' },
+      // 顶部动作条：横向滚动，当前动作高亮
+      chipBarWrapper: { marginHorizontal: -space.lg },
+      chipBar: {
+        paddingHorizontal: space.lg,
+        gap: space.sm,
+        alignItems: 'center' as const,
+      },
 
-  // 组数：整屏第二重要的信息，只排在数值后面
-  setRow: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'center', gap: 8 },
-  setNumber: { fontSize: 28, fontWeight: '800' },
-  setPlanned: { fontSize: 13, color: '#8a8f98' },
+      // 组数：整屏第二重要的信息，只排在数值后面
+      setRow: {
+        flexDirection: 'row' as const,
+        alignItems: 'baseline' as const,
+        justifyContent: 'center' as const,
+        gap: space.sm,
+      },
+      setNumber: { fontSize: fontSize.h2, fontWeight: weight.bold },
+      setPlanned: { fontSize: fontSize.caption, color: palette.textMuted },
 
-  bigRow: { flex: 1, flexDirection: 'row', alignItems: 'center' },
-  bigTimes: { fontSize: 24, color: '#8a8f98', marginHorizontal: 4 },
-  dragHint: { fontSize: 12, color: '#a8adb5', textAlign: 'center' },
-  lastHint: { fontSize: 13, color: '#8a8f98', textAlign: 'center' },
+      // 大数字那一行。凹面色块把它和周围的正文分开，形成「仪表读数区」
+      bigRow: {
+        flex: 1,
+        flexDirection: 'row' as const,
+        alignItems: 'center' as const,
+        marginVertical: space.xs,
+        borderRadius: radius.lg,
+        backgroundColor: palette.surfaceSunken,
+      },
+      bigTimes: {
+        fontSize: fontSize.h2,
+        color: palette.textFaint,
+        marginHorizontal: space.xs,
+      },
+      dragHint: {
+        fontSize: fontSize.label,
+        color: palette.textFaint,
+        textAlign: 'center' as const,
+        letterSpacing: tracking.label,
+      },
+      lastHint: {
+        fontSize: fontSize.caption,
+        color: palette.textMuted,
+        textAlign: 'center' as const,
+      },
 
-  steppers: { flexDirection: 'row', justifyContent: 'space-around' },
+      steppers: {
+        flexDirection: 'row' as const,
+        justifyContent: 'space-around' as const,
+      },
 
-  completeButton: {
-    backgroundColor: '#2b7fff',
-    borderRadius: 14,
-    paddingVertical: 18,
-    alignItems: 'center',
-  },
-  completeButtonText: { color: '#fff', fontSize: 18, fontWeight: '700' },
-  finishButton: {
-    backgroundColor: '#eceef2',
-    borderRadius: 12,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  finishButtonText: { color: '#4b5058', fontSize: 14, fontWeight: '600' },
-
-  // 动作选择弹层
-  modalRoot: { flex: 1, justifyContent: 'flex-end' },
-  // 不用 `StyleSheet.absoluteFillObject`：这一版 react-native 的类型里已经
-  // 没有这个导出了（只剩 `absoluteFill`），直接写全 absolute 四边更省事。
-  modalBackdrop: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-  },
-  sheet: {
-    maxHeight: '80%',
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 24,
-    gap: 12,
-  },
-  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  sheetTitle: { fontSize: 18, fontWeight: '700' },
-  sheetCancel: { paddingHorizontal: 8, paddingVertical: 4 },
-  sheetCancelText: { fontSize: 15, color: '#2b7fff', fontWeight: '600' },
-  search: {
-    backgroundColor: '#f3f4f7',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    fontSize: 16,
-  },
-  groupTitle: { fontSize: 12, color: '#8a8f98', marginTop: 12, marginBottom: 4 },
-  option: { paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: '#eceef2' },
-  optionText: { fontSize: 16 },
-  emptyHint: { textAlign: 'center', color: '#8a8f98', paddingVertical: 24 },
-});
+      // 动作选择弹层
+      modalRoot: { flex: 1, justifyContent: 'flex-end' as const },
+      // 不用 `StyleSheet.absoluteFillObject`：这一版 react-native 的类型里已经
+      // 没有这个导出了（只剩 `absoluteFill`），直接写全 absolute 四边更省事。
+      modalBackdrop: {
+        position: 'absolute' as const,
+        left: 0,
+        right: 0,
+        top: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0,0,0,0.55)',
+      },
+      sheet: {
+        maxHeight: '80%' as const,
+        backgroundColor: palette.surface,
+        borderTopLeftRadius: radius.xl,
+        borderTopRightRadius: radius.xl,
+        paddingHorizontal: space.lg,
+        paddingTop: space.lg,
+        paddingBottom: space.xl,
+        gap: space.md,
+      },
+      sheetHeader: {
+        flexDirection: 'row' as const,
+        alignItems: 'center' as const,
+        justifyContent: 'space-between' as const,
+      },
+      sheetTitle: { fontSize: fontSize.title, fontWeight: weight.bold },
+      sheetCancel: {
+        paddingHorizontal: space.sm,
+        paddingVertical: space.xs,
+      },
+      sheetCancelText: {
+        fontSize: fontSize.body,
+        color: palette.accent,
+        fontWeight: weight.medium,
+      },
+      search: {
+        backgroundColor: palette.surfaceRaised,
+        borderRadius: radius.md,
+        borderWidth: border.hairline,
+        borderColor: palette.border,
+        paddingHorizontal: space.md,
+        paddingVertical: space.sm,
+        fontSize: fontSize.body,
+        color: palette.text,
+      },
+      groupTitle: {
+        fontSize: fontSize.label,
+        color: palette.textMuted,
+        letterSpacing: tracking.label,
+        marginTop: space.md,
+        marginBottom: space.xs,
+      },
+      option: {
+        paddingVertical: space.md,
+        borderBottomWidth: border.hairline,
+        borderBottomColor: palette.border,
+      },
+      optionText: { fontSize: fontSize.body, color: palette.text },
+      emptyHint: {
+        textAlign: 'center' as const,
+        color: palette.textMuted,
+        paddingVertical: space.xl,
+      },
+    }),
+    [palette],
+  );
+}

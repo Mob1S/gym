@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 
 import {
   CANCELED_MESSAGE,
@@ -8,6 +8,7 @@ import {
 } from '../../src/lib/backupFile';
 import { useDatabase } from '../../src/repositories/database';
 import { useActiveSession } from '../../src/store/activeSession';
+import { Button, Card, Screen, Text, space } from '../../src/ui';
 
 /** 哪一件正在跑。用它同时禁用两个按钮 —— 导出和导入都要独占整库，不能并发 */
 type RunningTask = 'export' | 'import' | null;
@@ -97,70 +98,88 @@ export default function SettingsTab() {
   const busy = running !== null;
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>设置</Text>
+    <Screen padded={false}>
+      <ScrollView
+        contentContainerStyle={{
+          paddingHorizontal: 20,
+          paddingTop: space.xl,
+          paddingBottom: space.lg,
+          gap: space.lg,
+        }}
+      >
+        <Text variant="h1">设置</Text>
 
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>备份</Text>
-        <Text style={styles.line}>
-          训练记录只存在这台手机上。App 卸载、手机丢失或系统清理数据都会让记录一起消失，
-          建议定期导出一份存到别处。
-        </Text>
-
-        <Pressable
-          style={[styles.button, styles.exportButton, busy && styles.buttonDisabled]}
-          onPress={handleExport}
-          disabled={busy}
-          accessibilityRole="button"
-        >
-          <Text style={styles.buttonText}>
-            {running === 'export' ? '导出中…' : '导出备份'}
+        <Card style={{ gap: space.sm }}>
+          <Text variant="title">备份</Text>
+          <Text variant="caption" color="textMuted">
+            训练记录只存在这台手机上。App 卸载、手机丢失或系统清理数据都会让记录一起消失，
+            建议定期导出一份存到别处。
           </Text>
-        </Pressable>
 
-        {/* 导入是整库替换，会把当前记录全部覆盖 —— 用警示色，别让它看起来
-            和「导出」一样安全 */}
-        <Pressable
-          style={[styles.button, styles.importButton, busy && styles.buttonDisabled]}
-          onPress={handleImport}
-          disabled={busy}
-          accessibilityRole="button"
-        >
-          <Text style={styles.buttonText}>
-            {running === 'import' ? '导入中…' : '导入备份'}
+          <Button
+            label="导出备份"
+            onPress={() => {
+              void handleExport();
+            }}
+            loading={running === 'export'}
+            loadingLabel="导出中…"
+            disabled={busy}
+            style={{ marginTop: space.sm }}
+          />
+
+          {/* 导入是整库替换，会把当前记录全部覆盖 —— 用警示色，别让它看起来
+              和「导出」一样安全 */}
+          <Button
+            label="导入备份"
+            variant="danger"
+            onPress={() => {
+              void handleImport();
+            }}
+            loading={running === 'import'}
+            loadingLabel="导入中…"
+            disabled={busy}
+          />
+
+          <Text variant="caption" color="textFaint" style={{ marginTop: space.sm }}>
+            导入会用自己的备份整体替换当前记录（不是合并），替换后无法撤销。
           </Text>
-        </Pressable>
+        </Card>
 
-        <Text style={styles.note}>
-          导入会用自己的备份整体替换当前记录（不是合并），替换后无法撤销。
-        </Text>
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>组间休息的一般参考</Text>
-        <Text style={styles.line}>· 多关节动作（深蹲、卧推、硬拉等）：2 – 3 分钟</Text>
-        <Text style={styles.line}>· 单关节动作（弯举、侧平举等）：1 – 2 分钟</Text>
-        <Text style={styles.note}>
-          以上是 ACSM 立场声明给出的一般区间，仅供参考。
-          本 App 不会用它做任何自动计算 —— 训练后只比较你自己这次的次数变化。
-        </Text>
-      </View>
-    </ScrollView>
+        <Card style={{ gap: space.sm }}>
+          <Text variant="title">组间休息的一般参考</Text>
+          {/* 两条区间用等宽数字，和 App 里其他数字同一套读法 */}
+          <View style={styles.referenceLine}>
+            <Text variant="numeric" style={styles.referenceValue}>
+              2 – 3 分钟
+            </Text>
+            <Text variant="caption" color="textMuted" style={{ flexShrink: 1 }}>
+              多关节动作（深蹲、卧推、硬拉等）
+            </Text>
+          </View>
+          <View style={styles.referenceLine}>
+            <Text variant="numeric" style={styles.referenceValue}>
+              1 – 2 分钟
+            </Text>
+            <Text variant="caption" color="textMuted" style={{ flexShrink: 1 }}>
+              单关节动作（弯举、侧平举等）
+            </Text>
+          </View>
+          <Text variant="caption" color="textFaint" style={{ marginTop: space.sm }}>
+            以上是 ACSM 立场声明给出的一般区间，仅供参考。
+            本 App 不会用它做任何自动计算 —— 训练后只比较你自己这次的次数变化。
+          </Text>
+        </Card>
+      </ScrollView>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 20, gap: 16 },
-  title: { fontSize: 24, fontWeight: '700' },
-  card: { backgroundColor: '#f4f5f7', borderRadius: 12, padding: 16, gap: 6 },
-  cardTitle: { fontSize: 15, fontWeight: '700', marginBottom: 4 },
-  line: { fontSize: 14, color: '#4b5058', lineHeight: 20 },
-  note: { fontSize: 12, color: '#8a8f98', marginTop: 8, lineHeight: 18 },
-
-  button: { borderRadius: 10, paddingVertical: 13, alignItems: 'center', marginTop: 6 },
-  exportButton: { backgroundColor: '#2b7fff' },
-  importButton: { backgroundColor: '#e5484d' },
-  // 进行中：变淡即可，文案本身会变成「导出中…／导入中…」
-  buttonDisabled: { opacity: 0.5 },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  referenceLine: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: space.md,
+  },
+  referenceValue: { fontSize: 15 },
 });

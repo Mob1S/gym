@@ -3,6 +3,7 @@ import { View, type LayoutChangeEvent } from 'react-native';
 import Svg, { Circle, Line, Polyline } from 'react-native-svg';
 
 import { buildChartGeometry } from '../lib/chartGeometry';
+import { usePalette } from '../ui/theme';
 
 interface TrendChartProps {
   /**
@@ -24,6 +25,9 @@ interface TrendChartProps {
  * **宽度靠 `onLayout` 量出来，不能写死。** 用固定 viewBox 加
  * `preserveAspectRatio="none"` 拉伸的话，圆点会被拉成椭圆（真机上很明显）。
  *
+ * 颜色取自主题：暗色下折线是信号橙、高亮点是绿；浅色下同色相但更深，
+ * 保证在暖白底上仍然看得见。SVG 不吃 `ColorRole`，所以这里直接读 palette。
+ *
  * @param props.values 每个下标对应一次训练的值（y 轴量纲由调用方决定）；
  *   `null` 表示那一次没有可画的点，线直接跨过去
  * @param props.highlightIndex 要高亮的下标（最好那一次），画成绿色实心；
@@ -41,6 +45,8 @@ export function TrendChart({
   showAxis = false,
   height = 180,
 }: TrendChartProps) {
+  const palette = usePalette();
+
   // 量出来的真实像素宽度。首帧必然是 0（onLayout 还没回调），
   // 所以下面算坐标前要先判 width > 0。
   const [width, setWidth] = useState(0);
@@ -81,7 +87,7 @@ export function TrendChart({
               y1={height - 1}
               x2={width}
               y2={height - 1}
-              stroke="#e3e5e9"
+              stroke={palette.border}
               strokeWidth={1}
             />
           ) : null}
@@ -90,7 +96,7 @@ export function TrendChart({
             <Polyline
               points={geometry.polyline}
               fill="none"
-              stroke="#2b7fff"
+              stroke={palette.accent}
               strokeWidth={showAxis ? 2.5 : 2}
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -105,7 +111,7 @@ export function TrendChart({
                 cx={dot.x}
                 cy={dot.y}
                 r={highlighted ? 5 : showAxis ? 3.5 : 3}
-                fill={highlighted ? '#34c759' : '#2b7fff'}
+                fill={highlighted ? palette.success : palette.accent}
               />
             );
           })}

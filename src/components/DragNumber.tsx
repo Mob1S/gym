@@ -3,10 +3,12 @@ import { useMemo, useRef } from 'react';
 import {
   PanResponder,
   StyleSheet,
-  Text,
   View,
   type PanResponderGestureState,
 } from 'react-native';
+
+import { Text } from '../ui/Text';
+import { space } from '../ui/tokens';
 
 /**
  * 每拖动这么多像素，数值变化一档。
@@ -147,10 +149,16 @@ export function DragNumber({
       {...panResponder.panHandlers}
     >
       <View style={styles.row}>
-        <Text style={styles.number}>{value}</Text>
-        {unit ? <Text style={styles.unit}>{unit}</Text> : null}
+        <Text variant="display">{value}</Text>
+        {unit ? (
+          <Text variant="title" color="textMuted" style={styles.unit}>
+            {unit}
+          </Text>
+        ) : null}
       </View>
-      <Text style={styles.label}>{label}</Text>
+      <Text variant="label" color="textFaint">
+        {label}
+      </Text>
     </View>
   );
 }
@@ -159,8 +167,7 @@ const styles = StyleSheet.create({
   // 没有背景、没有边框：这一块是靠手势生效的「隐形」热区，
   // 加任何可见的拖动把手都会在这块大数字上添乱。
   zone: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  row: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
-  number: { fontSize: 64, fontWeight: '800', letterSpacing: -2 },
-  unit: { fontSize: 20, fontWeight: '600', color: '#8a8f98' },
-  label: { fontSize: 12, color: '#8a8f98' },
+  // 单位要和数字的基线对齐，而不是盒子中心 —— 否则「kg」会浮在半空
+  row: { flexDirection: 'row', alignItems: 'baseline', gap: space.xs },
+  unit: { marginBottom: space.sm },
 });

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { View } from 'react-native';
 
 import { totalVolumeLoad } from '../domain/metrics';
 import { buildRestFeedback, type RestFeedback } from '../domain/restAdvice';
@@ -8,6 +8,10 @@ import { useDatabase } from '../repositories/database';
 import { getExercise } from '../repositories/exerciseRepo';
 import { getSession, listSessionExercises } from '../repositories/sessionRepo';
 import { listSets } from '../repositories/setRepo';
+import { Card } from '../ui/Card';
+import { StatTile } from '../ui/StatTile';
+import { Text } from '../ui/Text';
+import { space } from '../ui/tokens';
 
 /** 一个动作在这场训练里的汇总，界面上一一对应成一张卡片 */
 interface ExerciseSummary {
@@ -39,7 +43,8 @@ interface SessionSummaryViewProps {
  * 数据访问全部经过仓储层，界面不 import `src/db/`、不写 SQL。
  *
  * 这里的休息回顾是**粗略参考**，不是科学结论：只比较本次训练内首组与末组的
- * 次数差异。所以每个动作卡片第一行必须原样显示次数数组，用户才能自己核对。
+ * 次数差异。所以每个动作卡片第一行必须原样显示次数数组，用户才能自己核对 ——
+ * 次数数组是这个功能的**主角**，不是附注，所以它用等宽大字、紧挨着动作名。
  *
  * e1RM 在 v1 不显示（M4 才做），这里连算都不算。
  *
@@ -123,86 +128,68 @@ export function SessionSummaryView({ sessionId }: SessionSummaryViewProps) {
   // 数据没回来之前不渲染内容：否则空态文案「这次训练还没有完成的组」会先闪一下，
   // 再被真实的数据顶掉。
   if (!loaded) {
-    return <Text style={styles.hint}>载入中…</Text>;
+    return (
+      <Text
+        variant="body"
+        color="textMuted"
+        style={{ textAlign: 'center', marginTop: space.huge }}
+      >
+        载入中…
+      </Text>
+    );
   }
 
   return (
-    <View style={styles.content}>
-      <View style={styles.statsRow}>
-        <View style={styles.stat}>
-          <Text style={styles.statValue}>{totals.minutes}</Text>
-          <Text style={styles.statLabel}>分钟</Text>
-        </View>
-        <View style={styles.stat}>
-          <Text style={styles.statValue}>{totals.totalSets}</Text>
-          <Text style={styles.statLabel}>总组数</Text>
-        </View>
-        <View style={styles.stat}>
-          <Text style={styles.statValue}>{Math.round(totals.volume)}</Text>
-          <Text style={styles.statLabel}>总容量 kg</Text>
-        </View>
+    <View style={{ gap: space.lg }}>
+      {/* 三个数字平权。刻意不强调任何一个 —— 时长、组数、容量之间没有主次，
+          用户想看哪个取决于他今天在关心什么 */}
+      <View style={{ flexDirection: 'row', gap: space.sm }}>
+        <StatTile value={String(totals.minutes)} label="分钟" />
+        <StatTile value={String(totals.totalSets)} label="总组数" />
+        <StatTile value={String(Math.round(totals.volume))} label="总容量 kg" />
       </View>
 
       {/* 标题必须带「粗略参考」：这一屏不是科学建议，只是本次训练内的一次简单对比 */}
-      <Text style={styles.sectionLabel}>组间休息回顾（粗略参考）</Text>
+      <Text variant="label" color="textMuted" style={{ marginTop: space.sm }}>
+        组间休息回顾（粗略参考）
+      </Text>
 
       {summaries.length === 0 ? (
-        <Text style={styles.empty}>这次训练还没有完成的组</Text>
+        <Text variant="caption" color="textMuted">
+          这次训练还没有完成的组
+        </Text>
       ) : (
         summaries.map((s, index) => (
-          <View key={`${s.name}-${index}`} style={styles.card}>
-            {/* 第一行原样显示次数数组，用户能自己核对文案说得对不对 */}
-            <View style={styles.cardHeader}>
-              <Text style={styles.exerciseName} numberOfLines={1}>
+          <Card key={`${s.name}-${index}`} style={{ gap: space.sm }}>
+            {/* 第一行原样显示次数数组，用户能自己核对文案说得对不对。
+                次数数组用等宽大字，它才是这张卡的主角 */}
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'baseline',
+                justifyContent: 'space-between',
+                gap: space.md,
+              }}
+            >
+              <Text variant="title" numberOfLines={1} style={{ flexShrink: 1 }}>
                 {s.name}
               </Text>
-              <Text style={styles.repsArray}>{s.repsList.join(' / ')}</Text>
+              <Text variant="numeric" style={{ letterSpacing: 0.5 }}>
+                {s.repsList.join(' / ')}
+              </Text>
             </View>
             {s.feedback ? (
-              <Text style={styles.feedback}>{s.feedback.message}</Text>
+              <Text variant="caption" color="textMuted">
+                {s.feedback.message}
+              </Text>
             ) : (
-              <Text style={styles.feedbackMuted}>组数不足 3 组，暂不判断</Text>
+              <Text variant="caption" color="textFaint">
+                组数不足 3 组，暂不判断
+              </Text>
             )}
-          </View>
+          </Card>
         ))
       )}
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  hint: { textAlign: 'center', color: '#8a8f98', marginTop: 40 },
-
-  content: { gap: 14 },
-
-  statsRow: { flexDirection: 'row', gap: 10 },
-  stat: {
-    flex: 1,
-    backgroundColor: '#f4f5f7',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-  },
-  statValue: { fontSize: 20, fontWeight: '800' },
-  statLabel: { fontSize: 11, color: '#8a8f98' },
-
-  sectionLabel: {
-    fontSize: 12,
-    color: '#6b7280',
-    letterSpacing: 0.6,
-    marginTop: 6,
-  },
-
-  card: { backgroundColor: '#f4f5f7', borderRadius: 12, padding: 14, gap: 6 },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-  exerciseName: { flexShrink: 1, fontSize: 15, fontWeight: '600' },
-  repsArray: { fontSize: 16, fontWeight: '700', letterSpacing: 0.5 },
-  feedback: { fontSize: 13, color: '#4b5058', lineHeight: 19 },
-  feedbackMuted: { fontSize: 13, color: '#a0a4ab' },
-  empty: { color: '#8a8f98', fontSize: 13 },
-});

@@ -1,12 +1,6 @@
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import {
-  ScrollView,
-  StyleSheet,
-  Text,
-  useWindowDimensions,
-  View,
-} from 'react-native';
+import { ScrollView, useWindowDimensions, View } from 'react-native';
 
 import { TrendChart } from '../../src/components/TrendChart';
 import {
@@ -21,6 +15,7 @@ import { formatDate, formatDateTime } from '../../src/lib/format';
 import { useDatabase } from '../../src/repositories/database';
 import { getExercise } from '../../src/repositories/exerciseRepo';
 import { listCompletedSetPoints } from '../../src/repositories/progressRepo';
+import { Card, Screen, Text, space, usePalette } from '../../src/ui';
 
 /** 一张卡要显示的东西。三张卡的措辞刻意不同，见设计文档 §3.3 */
 interface CardModel {
@@ -54,6 +49,8 @@ export default function ExerciseProgressScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   // 屏宽即每张卡的宽度，横向分页的落点就是它
   const { width } = useWindowDimensions();
+  // 绑定了当前主题的样式。这一屏顶部用原生导航栏，所以 `Screen` 要 edgeToEdgeTop={false}
+  const styles = useExerciseStyles();
 
   // 动作名（设进导航栏标题）；库里查不到时为 null，标题退回「进步」
   const [exerciseName, setExerciseName] = useState<string | null>(null);
@@ -147,24 +144,34 @@ export default function ExerciseProgressScreen() {
 
   if (!loaded) {
     return (
-      <View style={styles.center}>
-        <Text style={styles.hint}>载入中…</Text>
-      </View>
+      <Screen edgeToEdgeTop={false} padded={false}>
+        <View style={styles.center}>
+          <Text variant="body" color="textMuted">
+            载入中…
+          </Text>
+        </View>
+      </Screen>
     );
   }
 
   if (points.length === 0) {
     return (
-      <View style={styles.center}>
-        <Stack.Screen options={{ title: exerciseName ?? '进步' }} />
-        <Text style={styles.hint}>这个动作还没有记录</Text>
-        <Text style={styles.subHint}>练过一次之后这里就会有曲线</Text>
-      </View>
+      <Screen edgeToEdgeTop={false} padded={false}>
+        <View style={styles.center}>
+          <Stack.Screen options={{ title: exerciseName ?? '进步' }} />
+          <Text variant="title" color="textMuted">
+            这个动作还没有记录
+          </Text>
+          <Text variant="caption" color="textFaint">
+            练过一次之后这里就会有曲线
+          </Text>
+        </View>
+      </Screen>
     );
   }
 
   return (
-    <View style={styles.screen}>
+    <Screen edgeToEdgeTop={false} padded={false}>
       {/* 标题用动作名：这一页看的全是同一个动作的数据 */}
       <Stack.Screen options={{ title: exerciseName ?? '进步' }} />
 
@@ -182,18 +189,29 @@ export default function ExerciseProgressScreen() {
           const hasPoint = card.series.some((value) => value !== null);
           return (
             <View key={card.key} style={[styles.page, { width }]}>
-              <View style={styles.card}>
+              <Card style={{ gap: space.sm }}>
                 <View style={styles.cardHead}>
-                  <Text style={styles.cardTitle}>{card.title}</Text>
-                  <Text style={styles.cardBadge}>{card.badge}</Text>
+                  <Text variant="title">{card.title}</Text>
+                  <Text variant="caption" color="textMuted" numberOfLines={1}>
+                    {card.badge}
+                  </Text>
                 </View>
 
+                {/* 这张卡的核心数字：给到 40px，是整页最该被看见的东西 */}
                 <View style={styles.valueRow}>
-                  <Text style={styles.cardValue}>{card.value}</Text>
-                  <Text style={styles.cardUnit}>{card.unit}</Text>
+                  <Text variant="numeric" style={styles.cardValue}>
+                    {card.value}
+                  </Text>
+                  <Text variant="caption" color="textMuted">
+                    {card.unit}
+                  </Text>
                 </View>
 
-                {card.note ? <Text style={styles.cardNote}>{card.note}</Text> : null}
+                {card.note ? (
+                  <Text variant="caption" color="textMuted">
+                    {card.note}
+                  </Text>
+                ) : null}
 
                 {hasPoint ? (
                   <TrendChart
@@ -203,33 +221,42 @@ export default function ExerciseProgressScreen() {
                     height={180}
                   />
                 ) : (
-                  <Text style={styles.cardNote}>还没有记录</Text>
+                  <Text variant="caption" color="textMuted">
+                    还没有记录
+                  </Text>
                 )}
 
                 {firstAt !== null && lastAt !== null ? (
                   <View style={styles.xaxis}>
-                    <Text style={styles.xaxisText}>{formatDate(firstAt)}</Text>
-                    <Text style={styles.xaxisText}>{formatDate(lastAt)}</Text>
+                    <Text variant="label" color="textFaint">
+                      {formatDate(firstAt)}
+                    </Text>
+                    <Text variant="label" color="textFaint">
+                      {formatDate(lastAt)}
+                    </Text>
                   </View>
                 ) : null}
 
                 {/* e1RM 缺点的解释只在这一张卡上出现 —— 另两张永远没有缺点 */}
                 {card.key === 'oneRepMax' && summary.missingOneRepMaxCount > 0 ? (
-                  <Text style={styles.cardNote}>
+                  <Text variant="caption" color="textMuted">
                     有 {summary.missingOneRepMaxCount} 次训练没有可用于换算的组（次数 &gt; 10）
                   </Text>
                 ) : null}
 
                 {points.length === 1 ? (
-                  <Text style={styles.cardNote}>再练一次就能看到走势</Text>
+                  <Text variant="caption" color="textMuted">
+                    再练一次就能看到走势
+                  </Text>
                 ) : null}
-              </View>
+              </Card>
             </View>
           );
         })}
       </ScrollView>
 
-      {/* 分页指示不是装饰：横向滑动本身没有任何提示，没有它用户不知道旁边还有两张 */}
+      {/* 分页指示不是装饰：横向滑动本身没有任何提示，没有它用户不知道旁边还有两张。
+          当前页那一条拉长成短横，比单纯变色更容易看出「一共三张、现在是第一张」 */}
       <View style={styles.dots}>
         {cards.map((card, index) => (
           <View
@@ -238,37 +265,66 @@ export default function ExerciseProgressScreen() {
           />
         ))}
       </View>
-    </View>
+    </Screen>
   );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#fff' },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 6 },
-  hint: { color: '#8a8f98' },
-  subHint: { color: '#a8adb5', fontSize: 13 },
+/**
+ * 这一屏用到的样式。
+ *
+ * 写成 hook 而不是模块级常量：颜色来自主题，模块级常量在模块加载时就固化了。
+ *
+ * @returns 绑定了当前主题的样式对象
+ */
+function useExerciseStyles() {
+  const palette = usePalette();
 
-  page: { padding: 20 },
-  card: { backgroundColor: '#f4f5f7', borderRadius: 14, padding: 16, gap: 8 },
-  cardHead: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  cardTitle: { fontSize: 15, fontWeight: '700' },
-  cardBadge: { fontSize: 12, color: '#8a8f98' },
+  return useMemo(
+    () => ({
+      center: {
+        flex: 1,
+        alignItems: 'center' as const,
+        justifyContent: 'center' as const,
+        gap: space.sm,
+      },
 
-  valueRow: { flexDirection: 'row', alignItems: 'baseline', gap: 4 },
-  cardValue: { fontSize: 34, fontWeight: '800' },
-  cardUnit: { fontSize: 15, color: '#4b5058' },
+      page: { padding: space.lg },
+      cardHead: {
+        flexDirection: 'row' as const,
+        alignItems: 'baseline' as const,
+        justifyContent: 'space-between' as const,
+        gap: space.sm,
+      },
 
-  cardNote: { fontSize: 12, color: '#8a8f98', lineHeight: 17 },
+      valueRow: {
+        flexDirection: 'row' as const,
+        alignItems: 'baseline' as const,
+        gap: space.xs,
+      },
+      // 40 比统计块的 30 更大：这一页只有一张卡，它就是主角
+      cardValue: { fontSize: 40, color: palette.text },
 
-  xaxis: { flexDirection: 'row', justifyContent: 'space-between' },
-  xaxisText: { fontSize: 11, color: '#a8adb5' },
+      xaxis: {
+        flexDirection: 'row' as const,
+        justifyContent: 'space-between' as const,
+      },
 
-  dots: { flexDirection: 'row', justifyContent: 'center', gap: 6, paddingBottom: 24 },
-  dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: '#d8dbe0' },
-  dotActive: { backgroundColor: '#2b7fff' },
-});
+      dots: {
+        flexDirection: 'row' as const,
+        justifyContent: 'center' as const,
+        alignItems: 'center' as const,
+        gap: space.sm,
+        paddingBottom: space.xl,
+      },
+      dot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+        backgroundColor: palette.borderStrong,
+      },
+      // 当前页拉长成短横，一眼能看出「一共三张、现在第一张」
+      dotActive: { width: 22, backgroundColor: palette.accent },
+    }),
+    [palette],
+  );
+}

@@ -1,5 +1,10 @@
-import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { AccessibilityInfo, Animated, Easing, View } from 'react-native';
+
+import { Button } from '../ui/Button';
+import { Text } from '../ui/Text';
+import { usePalette } from '../ui/theme';
+import { space } from '../ui/tokens';
 
 interface RestTimerProps {
   /** 本次休息开始的时间戳（`SetEntry.restStartedAt`） */
@@ -24,6 +29,9 @@ function formatElapsed(ms: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+/** 指示点的呼吸周期。1.6 秒接近平静呼吸，快了会显得焦躁，而这屏的基调是「不催人」 */
+const PULSE_DURATION_MS = 1600;
+
 /**
  * 组间休息正计时。
  *
@@ -33,7 +41,9 @@ function formatElapsed(ms: number): string {
  * 用 250ms 而不是 1000ms 驱动重渲染，是为了让秒数跳变最多迟 250ms，视觉上跟手；
  * `setInterval` 在这里只负责「催渲染」，不参与任何时间运算。
  *
- * 正计时、不设目标、不催人：练多久休息多久是用户自己的事。
+ * 正计时、不设目标、不催人：练多久休息多久是用户自己的事。钟面旁边那个呼吸的
+ * 小点只有一个作用 —— 证明「它真的在走」。静止的 `00:00` 分不出「刚开始休息」
+ * 和「计时挂了」，一个会呼吸的点能，而且它不设目标、不催促。
  *
  * @param props.startedAt 本次休息开始的时间戳（ms，`SetEntry.restStartedAt`）。
  *   每完成一组就会换一个新值，effect 靠它重新对齐
@@ -51,9 +61,15 @@ export function RestTimer({
   onStartNextSet,
   onSwitchExercise,
 }: RestTimerProps) {
+  const palette = usePalette();
+
   // 只用来「催渲染」的当前时间戳：每次 tick 重新读一次系统时间，
   // 中间漏掉多少 tick 都不影响显示结果（显示值永远是 now − startedAt）。
   const [now, setNow] = useState(() => Date.now());
+
+  // 呼吸指示点的透明度。用内置 Animated + useNativeDriver，
+  // 不引 reanimated 的动画 API（那套在 web 预览下的行为还要额外验证）
+  const pulse = useRef(new Animated.Value(1)).current;
 
   // 依赖 startedAt：换一组休息时时间戳变了，必须重新对齐一次，
   // 否则新一组会接着上一组的秒数继续往上走。定时器只在挂载/换组时重建。
@@ -65,61 +81,96 @@ export function RestTimer({
     return () => clearInterval(timer);
   }, [startedAt]);
 
+  // 呼吸动画单独一个 effect，只建一次。
+  // **必须尊重系统的「减弱动态效果」**：这个偏好是前庭功能障碍用户设定的，
+  // 忽略它可能直接让人不适。读一次初值即可，不必监听后续变化 —— 休息只有几分钟。
+  useEffect(() => {
+    let animation: Animated.CompositeAnimation | null = null;
+    let cancelled = false;
+
+    void AccessibilityInfo.isReduceMotionEnabled().then((reduceMotion) => {
+      if (cancelled || reduceMotion) return;
+      animation = Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulse, {
+            toValue: 0.25,
+            duration: PULSE_DURATION_MS / 2,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulse, {
+            toValue: 1,
+            duration: PULSE_DURATION_MS / 2,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: true,
+          }),
+        ]),
+      );
+      animation.start();
+    });
+
+    return () => {
+      cancelled = true;
+      animation?.stop();
+    };
+  }, [pulse]);
+
   const elapsed = formatElapsed(now - startedAt);
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.label}>组间休息</Text>
-      <Text style={styles.clock}>{elapsed}</Text>
-      <Text style={styles.justDone}>
+    <View
+      style={{
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: space.sm,
+      }}
+    >
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: space.sm,
+        }}
+      >
+        {/* 会呼吸的点 = 「正在计时」。这是全 App 仅有的两处动效之一 */}
+        <Animated.View
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: 4,
+            backgroundColor: palette.accent,
+            opacity: pulse,
+          }}
+        />
+        <Text variant="label" color="textMuted">
+          组间休息
+        </Text>
+      </View>
+
+      <Text variant="clock">{elapsed}</Text>
+
+      <Text
+        variant="caption"
+        color="textMuted"
+        style={{ marginBottom: space.xl }}
+      >
         刚刚完成 {justCompleted.weight} kg × {justCompleted.reps}
       </Text>
 
-      <Pressable
-        style={styles.primaryButton}
+      <Button
+        label="开始下一组"
         onPress={onStartNextSet}
         accessibilityLabel="开始下一组"
-      >
-        <Text style={styles.primaryButtonText}>开始下一组</Text>
-      </Pressable>
+      />
 
-      <Pressable
-        style={styles.linkButton}
+      <Button
+        label="或 换下一个动作"
+        variant="ghost"
         onPress={onSwitchExercise}
         accessibilityLabel="换下一个动作"
-      >
-        <Text style={styles.link}>或 换下一个动作</Text>
-      </Pressable>
+        style={{ marginTop: space.sm }}
+      />
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    paddingHorizontal: 24,
-  },
-  label: { fontSize: 13, color: '#8a8f98' },
-  // 等宽数字（tabular-nums）：秒数从 9 跳到 10 时宽度不变，整块数字不会左右抖。
-  clock: {
-    fontSize: 64,
-    fontWeight: '800',
-    letterSpacing: -2,
-    fontVariant: ['tabular-nums'],
-  },
-  justDone: { fontSize: 13, color: '#8a8f98', marginBottom: 20 },
-  primaryButton: {
-    backgroundColor: '#2b7fff',
-    borderRadius: 14,
-    paddingVertical: 16,
-    paddingHorizontal: 40,
-    alignItems: 'center',
-    minWidth: 240,
-  },
-  primaryButtonText: { color: '#fff', fontSize: 17, fontWeight: '700' },
-  linkButton: { padding: 8 },
-  link: { color: '#2b7fff', fontSize: 14 },
-});

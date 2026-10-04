@@ -1,4 +1,3 @@
-import * as SQLite from 'expo-sqlite';
 import {
   createContext,
   useContext,
@@ -8,30 +7,31 @@ import {
 } from 'react';
 import { ActivityIndicator, View } from 'react-native';
 
-import { createExpoExecutor } from '../db/expoSqlite';
+import { Text as ThemedText } from '../ui/Text';
+import { createDemoExecutor } from '../db/demoExecutor';
 import { migrate } from '../db/migrations';
 import type { SqlExecutor } from '../db/types';
-import { Text as ThemedText } from '../ui/Text';
 import { seedExercisesIfEmpty } from './exerciseRepo';
 
 /**
- * 应用级数据库上下文。
+ * **网页预览版**的数据库 Provider。
  *
- * **为什么放在 `src/repositories/` 而不是 `app/_layout.tsx`：**
- * 一是全局约束规定界面层永远不直接 import `src/db/`，Provider 必须建库、
- * 跑迁移、播种，这些都属于数据层；二是从路由文件里 export 组件再给别的路由
- * import，会和 expo-router 的布局树形成循环依赖。`app/_layout.tsx` 只是薄薄一层，
- * 包 `<DatabaseProvider>` 和 `<Stack>`。
+ * 平台解析规则让这个文件在 web 上顶替 `database.tsx`（Metro 优先取 `.web.tsx`），
+ * 所以 `expo-sqlite` 在 web 包里根本不会被 import —— 这正是目的：
+ * 它的 web 实现依赖 Web Worker，而 Metro 的静态 web 打包器不支持 worker 分块
+ * （详见 `src/db/demoExecutor.ts` 的说明）。
  *
- * 数据库就绪之前不放行 children，因此界面层拿到的 `useDatabase()` 永远非空，
- * 不需要到处判空。
+ * 真机（Android / iOS）走的仍然是 `database.tsx` + `expo-sqlite`。
+ * 本文件与 `demoExecutor.ts` 都不参与原生构建。
+ *
+ * 数据是内置的演示数据（`demoExecutor.ts` 里造好），**与手机上的真实记录完全隔离** ——
+ * web 端没有持久化，刷新页面即恢复初始的演示数据。
  */
+
 /**
- * 数据库上下文的载体。
- *
- * 初值是 `null`，但 Provider **在数据库就绪之前不放行 children**，所以凡是能
- * 渲染出来的组件，`useContext` 拿到的必然非空。`null` 只表示「还没就绪」，
- * 不是一种运行时状态。
+ * 数据库上下文的载体。与 `database.tsx` 里的同名对象是两份独立实现，
+ * 但对外契约完全一致：Provider 就绪之前不放行 children，所以 `useDatabase()`
+ * 永远拿到非空值。
  */
 const DatabaseContext = createContext<SqlExecutor | null>(null);
 
@@ -49,10 +49,12 @@ export function useDatabase(): SqlExecutor {
 }
 
 /**
- * 建库 → 开外键 → 跑迁移 → 播种，四步全部成功后才渲染 children。
+ * 建库 → 开外键 → 跑迁移 → 播种。四步的顺序与 `database.tsx` 保持一致。
  *
- * 四步的顺序有依赖：迁移依赖外键开关（级联删除）之外的 schema，播种依赖表已存在。
- * 任一步失败都不放行，而是渲染一段错误文案 —— 比让界面在半个库上乱跑强。
+ * 这里跑 `migrate` 与 `seedExercisesIfEmpty` **不是为了建表**（内存版不建表），
+ * 而是为了走一遍和真机相同的启动路径 —— 那两句会把 `PRAGMA` / `CREATE` /
+ * 播种用的 `INSERT` 发过来，`createDemoExecutor` 会安静地接住。
+ * 这样两边「启动时发生了什么」不会悄悄分叉。
  *
  * @param props.children 数据库就绪后才渲染的子树（正常情况下是整个 App）
  * @returns 就绪前是加载指示器，失败时是错误页，成功时是带 Context 的子树
@@ -65,11 +67,7 @@ export function DatabaseProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        const db = await SQLite.openDatabaseAsync('gym.db');
-        // 外键约束按连接生效，必须在每次打开后单独开启。
-        // node:sqlite 的测试适配器同样开了它，两边行为保持一致。
-        await db.execAsync('PRAGMA foreign_keys = ON');
-        const executor = createExpoExecutor(db);
+        const executor = createDemoExecutor();
         await migrate(executor);
         await seedExercisesIfEmpty(executor);
         if (!cancelled) setExec(executor);
@@ -95,8 +93,6 @@ export function DatabaseProvider({ children }: { children: ReactNode }) {
           gap: 8,
         }}
       >
-        {/* 这一屏在 `DatabaseProvider` 之内、页面之外，属于极少见的故障态。
-            它仍然必须用主题色 —— 否则浅色主题下会是深色底上的深色字 */}
         <ThemedText variant="title">数据库初始化失败</ThemedText>
         <ThemedText
           variant="caption"

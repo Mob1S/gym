@@ -1,14 +1,6 @@
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  FlatList,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native';
 
 import { TrendChart } from '../../src/components/TrendChart';
 import { buildProgressPoints, toSeries } from '../../src/domain/progress';
@@ -20,6 +12,7 @@ import {
   type CompletedSetPoint,
   type TrainedExercise,
 } from '../../src/repositories/progressRepo';
+import { Screen, Text, space, usePalette } from '../../src/ui';
 
 /** 列表一行要显示的东西 */
 interface ProgressRow {
@@ -87,7 +80,9 @@ function buildRows(
 export default function ProgressTab() {
   const exec = useDatabase();
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  // 状态栏与标签栏的让位由 `Screen` 统一处理
+  const styles = useProgressStyles();
+  const palette = usePalette();
 
   // 列表数据源；取数失败时故意保留旧行，不清空
   const [rows, setRows] = useState<ProgressRow[]>([]);
@@ -152,7 +147,7 @@ export default function ProgressTab() {
   const renderItem = useCallback(
     ({ item }: { item: ProgressRow }) => (
       <Pressable
-        style={({ pressed }) => [styles.row, pressed ? styles.rowPressed : null]}
+        style={({ pressed }) => [styles.row, { opacity: pressed ? 0.6 : 1 }]}
         onPress={() => {
           // 必须用对象形式：typedRoutes 只生成 `/exercise/[id]` 这个字面量，
           // 模板字符串过不了 tsc。
@@ -163,20 +158,26 @@ export default function ProgressTab() {
         }}
       >
         <View style={styles.rowText}>
-          <Text style={styles.rowName} numberOfLines={1}>
+          <Text variant="title" numberOfLines={1}>
             {item.name}
           </Text>
-          <Text style={styles.rowMeta}>
-            {formatDate(item.lastTrainedAt)} · {item.lastTop.weight} kg ×{' '}
-            {item.lastTop.reps}
-          </Text>
+          <View style={styles.rowMetaLine}>
+            {/* 最近一次最重的一组：这一屏要回答的就是「这个动作在涨吗」，
+                所以重量用等宽大字，日期退成旁边的说明 */}
+            <Text variant="numeric" style={styles.rowMeta}>
+              {item.lastTop.weight} kg
+            </Text>
+            <Text variant="caption" color="textMuted">
+              × {item.lastTop.reps} · {formatDate(item.lastTrainedAt)}
+            </Text>
+          </View>
         </View>
         <View style={styles.spark}>
-          <TrendChart values={item.spark} height={28} />
+          <TrendChart values={item.spark} height={32} />
         </View>
       </Pressable>
     ),
-    [router],
+    [router, styles],
   );
 
   /**
@@ -190,42 +191,47 @@ export default function ProgressTab() {
     if (error) {
       return (
         <View style={styles.stateBox}>
-          <Text style={styles.errorTitle}>进步数据加载失败</Text>
-          <Text style={styles.stateHint}>{error}</Text>
+          <Text variant="title" style={styles.errorTitle}>
+            进步数据加载失败
+          </Text>
+          <Text variant="caption" color="textMuted" style={{ textAlign: 'center' }}>
+            {error}
+          </Text>
         </View>
       );
     }
     return (
       <View style={styles.stateBox}>
-        <Text style={styles.emptyTitle}>还没有训练记录</Text>
-        <Text style={styles.stateHint}>去『训练』标签开始第一次吧</Text>
+        <Text variant="title">还没有训练记录</Text>
+        <Text variant="caption" color="textMuted">
+          去『训练』标签开始第一次吧
+        </Text>
       </View>
     );
   };
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top }]}>
-      <Text style={styles.title}>进步</Text>
+    <Screen>
+      <Text variant="h1" style={{ paddingTop: space.xl, paddingBottom: space.md }}>
+        进步
+      </Text>
 
       {loading && rows.length === 0 ? (
         <View style={styles.stateBox}>
-          <ActivityIndicator />
+          <ActivityIndicator color={palette.accent} />
         </View>
       ) : null}
 
       <FlatList
-        style={styles.list}
+        style={{ flex: 1 }}
         data={rows}
         keyExtractor={(item) => item.exerciseId}
         renderItem={renderItem}
         ItemSeparatorComponent={Separator}
-        contentContainerStyle={[
-          styles.listContent,
-          { paddingBottom: insets.bottom + 24 },
-        ]}
+        contentContainerStyle={{ paddingBottom: space.lg }}
         ListEmptyComponent={renderEmpty()}
       />
-    </View>
+    </Screen>
   );
 }
 
@@ -235,38 +241,52 @@ export default function ProgressTab() {
  * @returns 一条分隔线
  */
 function Separator() {
-  return <View style={styles.separator} />;
+  const palette = usePalette();
+  return (
+    <View
+      style={{
+        height: StyleSheet.hairlineWidth,
+        backgroundColor: palette.border,
+      }}
+    />
+  );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#fff' },
-  title: {
-    fontSize: 24,
-    fontWeight: '700',
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 8,
-  },
+/**
+ * 这一屏用到的样式。
+ *
+ * 写成 hook 而不是模块级常量：颜色来自主题，模块级常量在模块加载时就固化了。
+ *
+ * @returns 绑定了当前主题的样式对象
+ */
+function useProgressStyles() {
+  const palette = usePalette();
 
-  list: { flex: 1 },
-  listContent: { paddingHorizontal: 20 },
+  return useMemo(
+    () => ({
+      row: {
+        flexDirection: 'row' as const,
+        alignItems: 'center' as const,
+        gap: space.md,
+        paddingVertical: space.md,
+      },
+      rowText: { flex: 1, gap: space.xs },
+      rowMetaLine: {
+        flexDirection: 'row' as const,
+        alignItems: 'baseline' as const,
+        gap: space.sm,
+      },
+      rowMeta: { color: palette.text },
+      // 迷你走势要有确定宽度，TrendChart 靠 onLayout 量它
+      spark: { width: 72 },
 
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 14,
-  },
-  rowPressed: { opacity: 0.5 },
-  rowText: { flex: 1, gap: 4 },
-  rowName: { fontSize: 17, fontWeight: '600' },
-  rowMeta: { fontSize: 13, color: '#4b5058' },
-  // 迷你走势要有确定宽度，TrendChart 靠 onLayout 量它
-  spark: { width: 64 },
-  separator: { height: StyleSheet.hairlineWidth, backgroundColor: '#e3e5e9' },
-
-  stateBox: { paddingVertical: 48, paddingHorizontal: 20, gap: 8 },
-  emptyTitle: { fontSize: 16, fontWeight: '600' },
-  errorTitle: { fontSize: 16, fontWeight: '600', color: '#c0392b' },
-  stateHint: { fontSize: 13, color: '#8a8f98' },
-});
+      stateBox: {
+        paddingVertical: space.huge,
+        gap: space.sm,
+        alignItems: 'center' as const,
+      },
+      errorTitle: { color: palette.danger },
+    }),
+    [palette],
+  );
+}

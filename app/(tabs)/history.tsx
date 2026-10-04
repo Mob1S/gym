@@ -1,14 +1,6 @@
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  FlatList,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native';
 
 import { formatDate } from '../../src/lib/format';
 import { useDatabase } from '../../src/repositories/database';
@@ -16,6 +8,7 @@ import {
   listSessionSummaries,
   type SessionSummary,
 } from '../../src/repositories/sessionRepo';
+import { Screen, Text, space, usePalette } from '../../src/ui';
 
 /** 列表一次取多少条：够翻一阵子，又不至于把几十场训练全塞进内存 */
 const HISTORY_LIMIT = 50;
@@ -56,10 +49,10 @@ export default function HistoryTab() {
   const exec = useDatabase();
   const router = useRouter();
 
-  // 这个标签页的 Tabs 布局设了 headerShown: false，没有导航栏帮忙让出状态栏，
-  // 所以顶部要自己用 insets 压下来。底部虽然由 tab bar 占位，仍额外留一点
-  // 呼吸空间，免得最后一行紧贴 tab bar。
-  const insets = useSafeAreaInsets();
+  // 这个标签页的 Tabs 布局设了 headerShown: false，状态栏与标签栏的让位都由
+  // 下面的 `Screen` 组件统一处理，这一页不再自己算 insets。
+  const styles = useHistoryStyles();
+  const palette = usePalette();
 
   // 列表数据源。取数失败时**故意**不清空它，见下面 `load` 的注释
   const [summaries, setSummaries] = useState<SessionSummary[]>([]);
@@ -117,30 +110,44 @@ export default function HistoryTab() {
    * `formatDate`（与详情页那份保持同一种写法），训练名限制一行，
    * 超长就截断而不是撑破行高。
    *
+   * 容量和组数用 `numeric` 变体（等宽数字）：一列训练摆在一起时，
+   * 数字等宽才能竖着扫下来比较，这是列表页最实际的收益。
+   *
    * @param item `listSessionSummaries` 返回的一行（已按时间倒序）
    * @returns 可点击的一行；点进去是该场的详情页
    */
   const renderItem = useCallback(
     ({ item }: { item: SessionSummary }) => (
       <Pressable
-        style={({ pressed }) => [styles.row, pressed ? styles.rowPressed : null]}
+        style={({ pressed }) => [
+          styles.row,
+          { opacity: pressed ? 0.6 : 1 },
+        ]}
         onPress={() => {
           // 必须用对象形式。typedRoutes 对动态路由生成的是 `/history/[id]`
           // 这个字面量，模板字符串过不了 tsc。
           router.push({ pathname: '/history/[id]', params: { id: item.id } });
         }}
       >
-        <Text style={styles.rowDate}>{formatDate(item.startedAt)}</Text>
-        <Text style={styles.rowName} numberOfLines={1}>
-          {item.name ?? '未命名训练'}
-        </Text>
-        <Text style={styles.rowMeta}>
-          {formatDuration(item.durationMinutes)} · {item.setCount} 组 ·{' '}
-          {formatVolume(item.volumeKg)} kg
-        </Text>
+        <View style={styles.rowText}>
+          <Text variant="caption" color="textMuted">
+            {formatDate(item.startedAt)}
+          </Text>
+          <Text variant="title" numberOfLines={1}>
+            {item.name ?? '未命名训练'}
+          </Text>
+          <View style={styles.rowMetaLine}>
+            <Text variant="numeric" style={styles.rowMeta}>
+              {formatVolume(item.volumeKg)} kg
+            </Text>
+            <Text variant="caption" color="textMuted">
+              {formatDuration(item.durationMinutes)} · {item.setCount} 组
+            </Text>
+          </View>
+        </View>
       </Pressable>
     ),
-    [router],
+    [router, styles],
   );
 
   /**
@@ -157,42 +164,47 @@ export default function HistoryTab() {
     if (error) {
       return (
         <View style={styles.stateBox}>
-          <Text style={styles.errorTitle}>历史记录加载失败</Text>
-          <Text style={styles.stateHint}>{error}</Text>
+          <Text variant="title" style={styles.errorTitle}>
+            历史记录加载失败
+          </Text>
+          <Text variant="caption" color="textMuted" style={{ textAlign: 'center' }}>
+            {error}
+          </Text>
         </View>
       );
     }
     return (
       <View style={styles.stateBox}>
-        <Text style={styles.emptyTitle}>还没有训练记录</Text>
-        <Text style={styles.stateHint}>去『训练』标签开始第一次吧</Text>
+        <Text variant="title">还没有训练记录</Text>
+        <Text variant="caption" color="textMuted">
+          去『训练』标签开始第一次吧
+        </Text>
       </View>
     );
   };
 
   return (
-    <View style={[styles.screen, { paddingTop: insets.top }]}>
-      <Text style={styles.title}>历史</Text>
+    <Screen>
+      <Text variant="h1" style={{ paddingTop: space.xl, paddingBottom: space.md }}>
+        历史
+      </Text>
 
       {loading && summaries.length === 0 ? (
         <View style={styles.stateBox}>
-          <ActivityIndicator />
+          <ActivityIndicator color={palette.accent} />
         </View>
       ) : null}
 
       <FlatList
-        style={styles.list}
+        style={{ flex: 1 }}
         data={summaries}
         keyExtractor={(item) => item.id}
         renderItem={renderItem}
         ItemSeparatorComponent={Separator}
-        contentContainerStyle={[
-          styles.listContent,
-          { paddingBottom: insets.bottom + 24 },
-        ]}
+        contentContainerStyle={{ paddingBottom: space.lg }}
         ListEmptyComponent={renderEmpty()}
       />
-    </View>
+    </Screen>
   );
 }
 
@@ -205,31 +217,51 @@ export default function HistoryTab() {
  * @returns 一条分隔线
  */
 function Separator() {
-  return <View style={styles.separator} />;
+  const palette = usePalette();
+  return (
+    <View
+      style={{
+        height: StyleSheet.hairlineWidth,
+        backgroundColor: palette.border,
+      }}
+    />
+  );
 }
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: '#fff' },
-  title: {
-    fontSize: 24,
-    fontWeight: '700',
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 8,
-  },
+/**
+ * 这一屏用到的样式。
+ *
+ * 写成 hook 而不是模块级常量：颜色来自主题，模块级常量在模块加载时就固化了。
+ *
+ * @returns 绑定了当前主题的样式对象
+ */
+function useHistoryStyles() {
+  const palette = usePalette();
 
-  list: { flex: 1 },
-  listContent: { paddingHorizontal: 20 },
+  return useMemo(
+    () => ({
+      row: {
+        flexDirection: 'row' as const,
+        alignItems: 'center' as const,
+        gap: space.md,
+        paddingVertical: space.md,
+      },
+      rowText: { flex: 1, gap: space.xs },
+      rowMetaLine: {
+        flexDirection: 'row' as const,
+        alignItems: 'baseline' as const,
+        gap: space.sm,
+      },
+      // 容量是这一屏最该被比较的数字，所以它比旁边的时长/组数更大、更亮
+      rowMeta: { color: palette.text },
 
-  row: { paddingVertical: 14, gap: 4 },
-  rowPressed: { opacity: 0.5 },
-  rowDate: { fontSize: 13, color: '#8a8f98' },
-  rowName: { fontSize: 17, fontWeight: '600' },
-  rowMeta: { fontSize: 13, color: '#4b5058' },
-  separator: { height: StyleSheet.hairlineWidth, backgroundColor: '#e3e5e9' },
-
-  stateBox: { paddingVertical: 48, paddingHorizontal: 20, gap: 8 },
-  emptyTitle: { fontSize: 16, fontWeight: '600' },
-  errorTitle: { fontSize: 16, fontWeight: '600', color: '#c0392b' },
-  stateHint: { fontSize: 13, color: '#8a8f98' },
-});
+      stateBox: {
+        paddingVertical: space.huge,
+        gap: space.sm,
+        alignItems: 'center' as const,
+      },
+      errorTitle: { color: palette.danger },
+    }),
+    [palette],
+  );
+}
