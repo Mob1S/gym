@@ -11,6 +11,7 @@ import { Text as ThemedText } from '../ui/Text';
 import { createDemoExecutor } from '../db/demoExecutor';
 import { migrate } from '../db/migrations';
 import type { SqlExecutor } from '../db/types';
+import { ThemePreferenceProvider } from '../store/themePreference';
 import { seedExercisesIfEmpty } from './exerciseRepo';
 
 /**
@@ -114,6 +115,10 @@ export function DatabaseProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <DatabaseContext.Provider value={exec}>{children}</DatabaseContext.Provider>
+    <DatabaseContext.Provider value={exec}>
+      {/* 与真机版 database.tsx 保持同一种嵌套：主题偏好要读库，
+          所以必须包在数据库 Provider 之内 */}
+      <ThemePreferenceProvider>{children}</ThemePreferenceProvider>
+    </DatabaseContext.Provider>
   );
 }

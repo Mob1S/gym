@@ -33,6 +33,7 @@ export {
   type Palette,
   type ColorRole,
   type Theme,
+  type ThemeOverride,
 } from './theme';
 
 export {

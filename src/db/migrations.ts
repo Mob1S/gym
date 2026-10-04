@@ -1,5 +1,5 @@
 import type { SqlExecutor } from './types';
-import { CREATE_META_SQL, CREATE_TABLES_SQL } from './schema';
+import { CREATE_META_SQL, CREATE_SETTINGS_SQL, CREATE_TABLES_SQL } from './schema';
 
 /**
  * 一个版本化迁移项。
@@ -22,6 +22,15 @@ export const MIGRATIONS: Migration[] = [
   {
     version: 1,
     statements: [CREATE_META_SQL, CREATE_TABLES_SQL],
+  },
+  {
+    // v2：加用户偏好表，用来存「主题模式」这类设置。
+    //
+    // 已有的库会走到这里，新建的库会从 v1 顺序跑上来 —— 两条路都得到同一张表。
+    // 这一项**不能并进 v1**：v1 早就发布过，改它等于让已经升到 v1 的库永远拿不到
+    // 这张表（它们的 `schema_version` 已经是 1，不会再跑 v1）。
+    version: 2,
+    statements: [CREATE_SETTINGS_SQL],
   },
 ];
 

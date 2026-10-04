@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import {
   CANCELED_MESSAGE,
@@ -7,11 +7,24 @@ import {
   shareBackup,
 } from '../../src/lib/backupFile';
 import { useDatabase } from '../../src/repositories/database';
+import type { ThemeMode } from '../../src/repositories/settingsRepo';
 import { useActiveSession } from '../../src/store/activeSession';
-import { Button, Card, Screen, Text, space } from '../../src/ui';
+import { useThemePreference } from '../../src/store/themePreference';
+import { Button, Card, Screen, Text, space, usePalette } from '../../src/ui';
 
 /** 哪一件正在跑。用它同时禁用两个按钮 —— 导出和导入都要独占整库，不能并发 */
 type RunningTask = 'export' | 'import' | null;
+
+/**
+ * 主题三选一的按钮顺序与文案。
+ *
+ * 「跟随系统」排第一：它是默认值，也是被选中的那一个该在的位置。
+ */
+const THEME_MODE_LABELS: { mode: ThemeMode; label: string }[] = [
+  { mode: 'system', label: '跟随系统' },
+  { mode: 'light', label: '浅色' },
+  { mode: 'dark', label: '深色' },
+];
 
 /**
  * 设置页：备份的导出 / 导入，外加一段组间休息的参考区间。
@@ -27,6 +40,11 @@ type RunningTask = 'export' | 'import' | null;
 export default function SettingsTab() {
   const exec = useDatabase();
   const [running, setRunning] = useState<RunningTask>(null);
+
+  // 主题偏好：当前选中的模式 + 切换函数。读取与落盘都在 Provider 里
+  const { mode, setMode } = useThemePreference();
+  // 这一页也要主题色（选中态那个橙底按钮），用同一个 palette 才不会和别处不一致
+  const palette = usePalette();
 
   /**
    * 导出并分享一份备份文件。
@@ -110,6 +128,49 @@ export default function SettingsTab() {
         <Text variant="h1">设置</Text>
 
         <Card style={{ gap: space.sm }}>
+          <Text variant="title">外观</Text>
+          <Text variant="caption" color="textMuted">
+            默认跟随系统的深色 / 浅色设置。也可以固定成其中一种，不随系统变。
+          </Text>
+
+          {/* 三选一而不是开关：开关只能表达「深/浅」两种，「跟随系统」没有位置放。
+              它才是默认值，也是大多数人想要的 */}
+          <View style={styles.modeRow}>
+            {THEME_MODE_LABELS.map((item) => {
+              const active = item.mode === mode;
+              return (
+                <Pressable
+                  key={item.mode}
+                  onPress={() => setMode(item.mode)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  accessibilityLabel={`主题：${item.label}`}
+                  style={[
+                    styles.modeButton,
+                    {
+                      backgroundColor: active
+                        ? palette.accent
+                        : palette.surfaceRaised,
+                      borderColor: active ? palette.accent : palette.border,
+                    },
+                  ]}
+                >
+                  <Text
+                    variant="caption"
+                    style={{
+                      fontWeight: '600',
+                      color: active ? palette.onAccent : palette.textMuted,
+                    }}
+                  >
+                    {item.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </Card>
+
+        <Card style={{ gap: space.sm }}>
           <Text variant="title">备份</Text>
           <Text variant="caption" color="textMuted">
             训练记录只存在这台手机上。App 卸载、手机丢失或系统清理数据都会让记录一起消失，
@@ -175,6 +236,17 @@ export default function SettingsTab() {
 }
 
 const styles = StyleSheet.create({
+  // 三选一横排。等宽（flex: 1）比按文字宽度自适应更整齐，
+  // 而且选中态换到哪一项都不会让整排宽度跳一下
+  modeRow: { flexDirection: 'row', gap: space.sm, marginTop: space.sm },
+  modeButton: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: space.md,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+
   referenceLine: {
     flexDirection: 'row',
     alignItems: 'baseline',

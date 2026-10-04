@@ -43,4 +43,4 @@ export interface SqlExecutor {
  * 当前库结构版本，备份导出时写进文件的 `schemaVersion` 字段。
  * 必须与 `db/migrations.ts` 里 `MIGRATIONS` 的最后一项保持一致。
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;

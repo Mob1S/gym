@@ -75,3 +75,19 @@ CREATE TABLE IF NOT EXISTS app_meta (
   value TEXT NOT NULL
 );
 `;
+
+/**
+ * 用户偏好设置。键值对形式，值是文本。
+ *
+ * 目前只存一个键（见 `repositories/settingsRepo.ts` 的 `THEME_MODE_KEY`），
+ * 但做成通用的键值表而不是单列表，是为了以后加偏好时不必再动一次 schema。
+ *
+ * **与 `app_meta` 分开是有意的**：`app_meta` 属于库结构本身（版本号），
+ * 进备份、进迁移；这一张属于用户偏好，跟着用户走，语义不同。
+ */
+export const CREATE_SETTINGS_SQL = `
+CREATE TABLE IF NOT EXISTS app_setting (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+`;
