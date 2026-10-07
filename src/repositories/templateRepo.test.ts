@@ -1,10 +1,13 @@
 import { createMigratedExecutor } from '../db/__tests__/nodeExecutor';
 import type { SqlExecutor } from '../db/types';
 import { createCustomExercise } from './exerciseRepo';
+import { createSession } from './sessionRepo';
 import {
   createTemplate,
+  deleteTemplate,
   getTemplate,
   listTemplates,
+  moveTemplate,
   renameTemplate,
   setTemplateExercises,
 } from './templateRepo';
@@ -101,5 +104,79 @@ describe('templateRepo', () => {
     const detail = await getTemplate(exec, legs.id);
     expect(detail?.template.name).toBe('腿部日');
     expect(detail?.exercises).toHaveLength(1);
+  });
+});
+
+describe('删除计划', () => {
+  it('删掉之后它不再出现在列表里，剩余计划的 position 不留空洞', async () => {
+    const exec = await createMigratedExecutor();
+    await createTemplate(exec, '推日');
+    const pull = await createTemplate(exec, '拉日');
+    await createTemplate(exec, '腿日');
+
+    await deleteTemplate(exec, pull.id);
+
+    const templates = await listTemplates(exec);
+    expect(templates.map((t) => t.name)).toEqual(['推日', '腿日']);
+    // 空洞本身不会让 order by 出错，但以后要把计划插到中间（上移/下移、
+    // 新建到指定位置）就会错位 —— 是个埋着的坑。
+    expect(templates.map((t) => t.position)).toEqual([0, 1]);
+  });
+
+  it('删计划之后，用它练过的历史训练还在，只是不再指向任何计划', async () => {
+    const exec = await createMigratedExecutor();
+    const legs = await createTemplate(exec, '腿日');
+    const history = await createSession(exec, '腿部日', legs.id);
+
+    const result = await deleteTemplate(exec, legs.id);
+
+    expect(result.affectedSessions).toBe(1);
+    const row = await exec.first<{ name: string; template_id: string | null }>(
+      'SELECT name, template_id FROM session WHERE id = ?',
+      [history.id],
+    );
+    // 历史记录**绝不能跟着计划一起消失**：用户练过的组是他的数据，
+    // 计划只是编排。这里同时挡住「顺手把 session 也删了」那种实现。
+    expect(row?.name).toBe('腿部日');
+    expect(row?.template_id).toBeNull();
+  });
+});
+
+describe('调整计划的轮转顺序', () => {
+  it('把第二个上移一位，两位互换', async () => {
+    const exec = await createMigratedExecutor();
+    await createTemplate(exec, '推日');
+    await createTemplate(exec, '拉日');
+    await createTemplate(exec, '腿日');
+
+    await moveTemplate(exec, 1, 0);
+
+    expect((await listTemplates(exec)).map((t) => t.name)).toEqual([
+      '拉日',
+      '推日',
+      '腿日',
+    ]);
+  });
+
+  it('把第一个下移一位', async () => {
+    const exec = await createMigratedExecutor();
+    await createTemplate(exec, '推日');
+    await createTemplate(exec, '拉日');
+
+    await moveTemplate(exec, 0, 1);
+
+    expect((await listTemplates(exec)).map((t) => t.name)).toEqual(['拉日', '推日']);
+  });
+
+  it('目标是同一个位置时什么都不做（不会把 position 弄重）', async () => {
+    const exec = await createMigratedExecutor();
+    await createTemplate(exec, '推日');
+    await createTemplate(exec, '拉日');
+
+    await moveTemplate(exec, 0, 0);
+
+    const templates = await listTemplates(exec);
+    expect(templates.map((t) => t.name)).toEqual(['推日', '拉日']);
+    expect(templates.map((t) => t.position)).toEqual([0, 1]);
   });
 });

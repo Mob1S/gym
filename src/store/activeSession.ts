@@ -2,12 +2,14 @@ import { create } from 'zustand';
 
 import type { SqlExecutor } from '../db/types';
 import { findStaleRest } from '../domain/rest';
+import { nextTemplateIndex } from '../domain/rotation';
 import type { SessionExercise, SetEntry, WorkoutSession } from '../domain/types';
 import { getExercise } from '../repositories/exerciseRepo';
 import {
   addExerciseToSession,
   createSession,
   findLastActiveSessionExerciseId,
+  findLatestTemplateId,
   finishSession,
   getActiveSession,
   listSessionExercises,
@@ -23,6 +25,7 @@ import {
   startRest,
   updateSetValues,
 } from '../repositories/setRepo';
+import { getTemplate, listTemplates } from '../repositories/templateRepo';
 
 const DEFAULT_WEIGHT_KG = 20;
 const DEFAULT_REPS = 8;
@@ -68,14 +71,31 @@ interface ActiveSessionState {
   /** 载入未结束的训练；没有就返回 false */
   resume: (exec: SqlExecutor) => Promise<boolean>;
   /**
-   * 开一场新训练，沿用上一次**已结束**训练的动作组合（没有历史时为空）。
+   * 开一场新训练，动作清单按**分化循环**取：轮到最后一套就练那一套。
    *
    * 库里已经有一场进行中的训练时**不新建**，返回 `'conflict'` 并把那一场装进
-   * store 交回界面。这是「同时只可能有一场进行中的训练」这条不变量唯一的守门人 ——
-   * 少了它，每点一次「开始新训练」都会多留一条未结束的记录，然后在你结束新的
-   * 那场之后冒出来，冒充「上次训练」。
+   * store 交回界面。这是「同时只可能有一场进行中的训练」这条不变量唯一的守门人。
+   *
+   * @param templateId 指定用哪套计划（界面上的「换一个计划」）；**省略或传
+   *   undefined 时按轮转规则自己算**，传 null 表示明确不按计划（复制上一次）
    */
-  startNew: (exec: SqlExecutor, name: string | null) => Promise<StartResult>;
+  startNew: (
+    exec: SqlExecutor,
+    name: string | null,
+    templateId?: string | null,
+  ) => Promise<StartResult>;
+  /**
+   * 用指定的计划开一场（首页「换一个计划」用）。
+   *
+   * 单独开一个方法而不是让界面传第三个参数给 `startNew`：轮转是默认路径，
+   * 界面十次里有九次不该关心参数；把「绕开轮转」做成一个名字明确的方法，
+   * 调用点一眼看得出这里发生了例外。
+   */
+  startNewWithTemplate: (
+    exec: SqlExecutor,
+    name: string | null,
+    templateId: string,
+  ) => Promise<StartResult>;
   addExercise: (exec: SqlExecutor, exerciseId: string) => Promise<void>;
   setCurrentIndex: (index: number) => void;
   /** 完成当前组的记录，落盘并立刻开始休息计时 */
@@ -218,6 +238,42 @@ async function addExerciseWithFirstSet(
 }
 
 /**
+ * 按分化循环算出这一场该用哪套计划。
+ *
+ * 「上一场用的哪套」由 `findLatestTemplateId` 从库里查，规则本身在
+ * `domain/rotation.ts` 的纯函数里 —— 那一层负责全部边界（只有一套、绕回
+ * 第一套、上一场的计划已被删），这里只做「查 + 算」两件事。
+ *
+ * @param exec SQL 执行器
+ * @returns 计划 id；**一套计划都没有时返回 null**，调用方据此退回
+ *   「复制上一次的动作清单」
+ */
+async function resolveNextTemplateId(exec: SqlExecutor): Promise<string | null> {
+  const [templates, lastTemplateId] = await Promise.all([
+    listTemplates(exec),
+    findLatestTemplateId(exec),
+  ]);
+  const index = nextTemplateIndex(templates, lastTemplateId);
+  return index === null ? null : templates[index].id;
+}
+
+/**
+ * 「上一次练了哪些动作」—— 没有计划时唯一的动作来源。
+ *
+ * `listSessions` 只返回**已结束**的训练，所以这里天然不会把一场还在进行中的
+ * 训练当成「上一次」。没有历史（第一次用）时返回空数组。
+ *
+ * @param exec SQL 执行器
+ * @returns 动作 id，顺序即上一场里的顺序
+ */
+async function previousSessionExerciseIds(exec: SqlExecutor): Promise<string[]> {
+  const previous = await listSessions(exec, 1);
+  if (!previous[0]) return [];
+  const sessionExercises = await listSessionExercises(exec, previous[0].id);
+  return sessionExercises.map((item) => item.exerciseId);
+}
+
+/**
  * 当前训练的 Zustand store。
  *
  * 状态**只存在内存里**，每个写操作都立刻落库，App 重启后靠 `resume` 从库重建。
@@ -258,40 +314,52 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
   /**
    * @param exec SQL 执行器
    * @param name 训练名，可为 null
+   * @param templateId 指定用哪套计划；省略 = 按轮转算，null = 不按计划
    * @returns `'started'` = 新建成功；`'conflict'` = **一个新记录都没建**，
    *          已有那一场已经装进 store，等界面问用户怎么办
    */
-  startNew: async (exec, name) => {
+  startNew: async (exec, name, templateId) => {
     // 复用 `resume` 而不是另写一次查询：它会把那一场连动作带组一起装进 store，
     // 界面选「接着练」时直接导航过去就有东西可渲染 —— 只返回一个 id 的话，
     // 记录页会因为 store 里没有 exercises 而误判成「这次训练还没有动作」。
     if (await get().resume(exec)) return 'conflict';
 
-    const session = await createSession(exec, name, null);
+    // 顺序不能反：**先定计划，再建 session**。轮转的输入是「最近一场已结束
+    // 训练用的模板」，先建出来的话这一场虽然 finished_at 还是 NULL、不会污染
+    // 那个查询，但「先建后定」很容易在后续改动里被误用别的接口把这一场算进去。
+    const chosen =
+      templateId === undefined ? await resolveNextTemplateId(exec) : templateId;
 
-    // 沿用上一次训练的动作组合，而不是每次都替用户挑一个动作。
-    //
-    // 原来的实现写死了「优先深蹲」，那是为了别让用户第一屏面对空列表偷的懒，
-    // 但它等于假设每个人都从深蹲开始 —— 健身房里绝大多数人按固定套路练
-    // （推日/拉日/腿日），每次从零挑动作是纯粹的浪费。Strong / Hevy 这类
-    // App 都是直接复制上一次的组合。
-    //
-    // `listSessions` 只返回**已结束**的训练，所以这里天然不会复制到一场
-    // 还在进行中的训练。没有历史（第一次用）时就是一场空训练，由界面上的
-    // 「添加动作」引导用户挑第一个动作。
-    const previous = await listSessions(exec, 1);
-    const previousExercises = previous[0]
-      ? await listSessionExercises(exec, previous[0].id)
-      : [];
+    const session = await createSession(exec, name, chosen);
 
-    for (const pe of previousExercises) {
-      await addExerciseWithFirstSet(exec, session.id, pe.exerciseId);
+    // 有计划就用计划里的动作清单；没有的话维持旧行为，复制上一次**已结束**
+    // 训练的动作组合（`listSessions` 只返回已结束的，所以天然不会复制到
+    // 一场还在进行中的训练）。第一次用 App 时是空的，由界面的「添加动作」引导。
+    const exerciseIds =
+      chosen === null
+        ? await previousSessionExerciseIds(exec)
+        : ((await getTemplate(exec, chosen))?.exercises ?? []).map(
+            (item) => item.templateExercise.exerciseId,
+          );
+
+    for (const exerciseId of exerciseIds) {
+      await addExerciseWithFirstSet(exec, session.id, exerciseId);
     }
 
     const exercises = await loadExercises(exec, session.id);
     set({ session, exercises, currentIndex: 0, loading: false });
     return 'started';
   },
+
+  /**
+   * 用指定的计划开一场（首页「换一个计划」用）。
+   *
+   * 单独开一个方法而不是让界面传第三个参数给 `startNew`：轮转是默认路径，
+   * 界面十次里有九次不该关心参数；把「绕开轮转」做成一个名字明确的方法，
+   * 调用点一眼看得出这里发生了例外。
+   */
+  startNewWithTemplate: (exec, name, templateId) =>
+    get().startNew(exec, name, templateId),
 
   /**
    * @param exec SQL 执行器

@@ -957,9 +957,15 @@ export async function deleteTemplate(
  * 上移就是把第 i 项和它前一项换一下，直接给出两个位置号最省事，
  * 也免了「相邻是谁」这种要再查一次库的推理。
  *
- * 两步 `UPDATE` 之间会短暂出现两个计划同处一个 `position`，这在 `position`
- * 只是普通整数列、且中间**没有任何查询**的前提下没有问题。**不要**在这里
- * 加读操作，也不要把这两步拆到事务外面。
+ * **必须先把当前那一行挪到一个不冲突的临时位置**（这里是 -1）。直接写两步
+ * `UPDATE ... WHERE position = ?` 会两句互相抵消：第一步把当前行写到
+ * `targetPosition` 之后，第二步的 `WHERE position = targetPosition` 会同时命中
+ * 「刚移动的那一行」和「原本就在那一行的那一个」，于是把两者一起改回原处 ——
+ * 顺序纹丝不动，而且**不报任何错**（实测：`node:sqlite` 上三种写法里只有这一种
+ * 真能互换）。改写成按 id 定位也不行：第一步之后两行同名，谁都分不出来。
+ *
+ * `-1` 不会与任何真实 `position` 撞车（`createTemplate` 取的是 `MAX(position) + 1`，
+ * 从 0 往上长）。中间那两步之间没有任何读操作，整个互换跑在一个事务里。
  *
  * @param exec SQL 执行器
  * @param currentPosition 要移动的计划当前的位置
@@ -974,14 +980,21 @@ export async function moveTemplate(
 
   await exec.run('BEGIN');
   try {
+    // 1) 当前行让位：挪到临时位置，`currentPosition` 空出来
     await exec.run(
       'UPDATE split_template SET position = ? WHERE position = ?',
-      [targetPosition, currentPosition],
+      [-1, currentPosition],
     );
-    await exec.run('UPDATE split_template SET position = ? WHERE position = ?', [
-      currentPosition,
-      targetPosition,
-    ]);
+    // 2) 原本占着目标位置的那一行补进空出来的位置
+    await exec.run(
+      'UPDATE split_template SET position = ? WHERE position = ?',
+      [currentPosition, targetPosition],
+    );
+    // 3) 被移动的那一行落到目标位置
+    await exec.run(
+      'UPDATE split_template SET position = ? WHERE position = ?',
+      [targetPosition, -1],
+    );
     await exec.run('COMMIT');
   } catch (error) {
     try {
@@ -993,6 +1006,15 @@ export async function moveTemplate(
   }
 }
 ```
+
+> **实施后补记（这一处的代码块原本是错的，已改）。** 上面这个函数体最初写的是「两句
+> `UPDATE ... WHERE position = ?` 按 position 对调」。实测在 `node:sqlite` 上那是
+> **静默无效**的：`position` 没有唯一约束，第一句跑完后两行同处一个 `position`，
+> 第二句同时命中两者、把它们一起改回原处，顺序纹丝不动且不报错 —— 两条测试红了才
+> 发现。当时还试过「先 `SELECT` 出 id、第二句按 id 定位」，同样无效。
+> 用真实 SQLite 跑过三种写法，只有「挪到临时位置 -1 → 目标行补位 → 被移动行落位」
+> 三步真能互换。**教训**：涉及「无唯一约束的排序列对调」的 SQL，不要靠推理，写下来
+> 就在真实引擎上跑一遍 —— 这类错误的特征是**不报错**。
 
 - [ ] **Step 4: 跑测试，确认绿了**
 
@@ -1009,6 +1031,8 @@ git commit -m "feat(repo): 删计划（不伤历史）与上移下移"
 ---
 
 ## Task 5: 备份带上计划（格式 1 → 2）
+
+> **前置：Task 4 必须先完成。** 这一步要把 `templateRepo` 的 `toTemplate` / `toTemplateExercise` 与两个 Row 接口加上 `export` 供 `backupRepo` 复用，而 Task 4 也在追加同一个文件的函数。两者并行会在同一个文件上互相覆盖 —— 所以 **Task 5 不能与 Task 4 同时跑**。
 
 **Files:**
 - Modify: `src/domain/backup.ts`
@@ -1186,16 +1210,29 @@ export interface BackupData {
   // 老备份（version 1）里没有 templateId 字段，缺失按 null 处理。
   // 这里刻意不用 takeNullableString：那个要求字段必须存在且显式为 null，
   // 对 v1 文件会直接判失败 —— 等于把老备份全废掉。
-  const templateId = raw.templateId === undefined ? null : raw.templateId;
-  if (templateId !== null && typeof templateId !== 'string') {
-    return {
-      ok: false,
-      reason: `${label} 的 templateId 必须是字符串或 null（收到 ${describe(templateId)}）`,
-    };
+  //
+  // 也不能写成「读出来直接塞进返回值」：那样一个数字或对象会**静默**进库
+  // （JSON 里任何类型都能是任何东西），之后轮转把它们当 id 比较永远不相等，
+  // 表现为「计划莫名其妙不轮转了」。类型不合法要按下面这样显式失败。
+  const rawTemplateId = raw.templateId;
+  let templateId: string | null = null;
+  if (rawTemplateId !== undefined && rawTemplateId !== null) {
+    if (typeof rawTemplateId !== 'string' || rawTemplateId.length === 0) {
+      return {
+        ok: false,
+        reason: `${label} 的 templateId 必须是非空字符串或 null（收到 ${describe(rawTemplateId)}）`,
+      };
+    }
+    templateId = rawTemplateId;
   }
 ```
 
-并把返回值改成 `{ id: id.value, name: name.value, startedAt: startedAt.value, finishedAt: finishedAt.value, note: note.value, templateId }`。
+并把返回值改成（**替换掉 Task 1 留下的那一行写死的 `templateId: null,`，不是新增一行**）：
+
+```ts
+      note: note.value,
+      templateId,
+```
 
 4. 新增 `normalizeSplitTemplate` 与 `normalizeTemplateExercise`，照 `normalizeExercise` 的写法：
 
@@ -1827,8 +1864,10 @@ git commit -m "feat(ui): 训练计划的列表与编辑界面"
 - Modify: `app/(tabs)/index.tsx`
 
 **Interfaces:**
-- Consumes: Task 6 的 `startNew` / `startNewWithTemplate`、Task 3 `listTemplates` / `getTemplate`、`describeExercises`（`src/lib/sessionLabel.ts`）
+- Consumes: Task 6 的 `startNew` / `startNewWithTemplate`、Task 3 `listTemplates` / `getTemplate`、`nextTemplateIndex`（`src/domain/rotation.ts`）、`findLatestTemplateId`（`sessionRepo`）
 - Produces: 无（终端界面）
+
+> ⚠️ **不要用 `describeExercises`（`src/lib/sessionLabel.ts`）拼计划卡片上的动作说明。** 那个函数是给「进行中的训练」用的：它会 `filter((set) => set.isCompleted)` 并拼出「· 已记 N 组」，而计划里只有动作名、没有组（传进去会读到 `undefined.isCompleted` 直接抛错）。卡片上就用下面那个模板串手写：`${第一个动作名} 等 N 个动作`。
 
 - [ ] **Step 1: 加「今天该练」的状态与取数**
 

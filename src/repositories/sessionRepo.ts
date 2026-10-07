@@ -355,3 +355,30 @@ export async function listSessionSummaries(
     volumeKg: Number(row.volume_kg),
   }));
 }
+
+/**
+ * 最近一场**已结束且按计划练的**训练用的是哪套计划。轮转规则唯一的输入。
+ *
+ * 三个条件缺一不可：
+ * - `finished_at IS NOT NULL` —— 进行中的那一场还没练完，不能算进轮转；
+ * - `template_id IS NOT NULL` —— 不按计划练的那些场次（第一次用 App、
+ *   从别处导入的记录）不参与轮转，否则它们会把指针打回第一套；
+ * - `rowid DESC` —— `started_at` 只有毫秒精度，同一毫秒的两场会完全并列，
+ *   此时 SQLite 按扫描顺序返回（先插入的在前），语义就反了。
+ *   这个坑 `setRepo.getLastPerformance` 的注释里已经写过两遍。
+ *
+ * @param exec SQL 执行器
+ * @returns `split_template.id`；**一场这样的训练都没有时返回 null**
+ *   （调用方据此从第一套开始）
+ */
+export async function findLatestTemplateId(
+  exec: SqlExecutor,
+): Promise<string | null> {
+  const row = await exec.first<{ template_id: string | null }>(
+    `SELECT template_id FROM session
+      WHERE finished_at IS NOT NULL AND template_id IS NOT NULL
+      ORDER BY started_at DESC, rowid DESC
+      LIMIT 1`,
+  );
+  return row?.template_id ?? null;
+}

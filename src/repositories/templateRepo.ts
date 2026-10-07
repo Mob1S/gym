@@ -231,3 +231,118 @@ export async function setTemplateExercises(
   }
   return detail;
 }
+
+/**
+ * 删掉一个计划。
+ *
+ * 两件必须一起做的事：
+ * 1. **把引用它的 `session.template_id` 置空。** 这一列刻意没有外键约束
+ *    （SQLite 对 `ALTER TABLE` 加的列级外键不强制，见 `schema.ts`），所以
+ *    置空这件事只能由这里负责。不置空的话，一场老训练会一直指着一个不存在的
+ *    计划 —— 轮转虽然能容错（`nextTemplateIndex` 会回到第一套），但「这场是按
+ *    哪套计划练的」就永久错了。
+ * 2. **重排剩余计划的 `position`**，不留空洞。
+ *
+ * 注意这句 `UPDATE` 是安全的：它上面的 `DELETE` 只碰 `split_template` 与
+ * `template_exercise`，不碰 `session`，所以不会出现「删 session 的同时又在读
+ * session 的子表」那种 `database table is locked`。
+ *
+ * @param exec SQL 执行器
+ * @param id 要删的计划
+ * @returns 有多少场历史训练不再指向任何计划（界面可以据此说一句「N 场历史记录
+ *   保留着，只是不再属于某个计划」）。**没有历史引用时是 0**
+ */
+export async function deleteTemplate(
+  exec: SqlExecutor,
+  id: string,
+): Promise<{ affectedSessions: number }> {
+  const target = await exec.first<{ position: number }>(
+    'SELECT position FROM split_template WHERE id = ?',
+    [id],
+  );
+  if (!target) return { affectedSessions: 0 };
+
+  const affected = await exec.first<{ n: number }>(
+    'SELECT COUNT(*) AS n FROM session WHERE template_id = ?',
+    [id],
+  );
+
+  await exec.run('BEGIN');
+  try {
+    await exec.run('UPDATE session SET template_id = NULL WHERE template_id = ?', [id]);
+    await exec.run('DELETE FROM split_template WHERE id = ?', [id]);
+    // template_exercise 靠外键级联删掉（建表时就写了 ON DELETE CASCADE）
+    await exec.run(
+      'UPDATE split_template SET position = position - 1 WHERE position > ?',
+      [target.position],
+    );
+    await exec.run('COMMIT');
+  } catch (error) {
+    try {
+      await exec.run('ROLLBACK');
+    } catch {
+      // 忽略：下面抛原始异常
+    }
+    throw error;
+  }
+
+  return { affectedSessions: Number(affected?.n ?? 0) };
+}
+
+/**
+ * 交换两个位置上的计划，用来给列表做上移/下移。
+ *
+ * 收的是**位置号**而不是计划 id：界面手里就是 `listTemplates` 回来的数组，
+ * 上移就是把第 i 项和它前一项换一下，直接给出两个位置号最省事，
+ * 也免了「相邻是谁」这种要再查一次库的推理。
+ *
+ * **必须先把当前那一行挪到一个不冲突的临时位置**（这里是 -1）。直接写两步
+ * `UPDATE ... WHERE position = ?` 会两句互相抵消：第一步把当前行写到
+ * `targetPosition` 之后，第二步的 `WHERE position = targetPosition` 会同时命中
+ * 「刚移动的那一行」和「原本就在那一行的那一个」，于是把两者一起改回原处 ——
+ * 顺序纹丝不动，而且**不报任何错**（实测：`node:sqlite` 上三种写法里只有这一种
+ * 真能互换）。改写成按 id 定位也不行：第一步之后两行同名，谁都分不出来。
+ *
+ * `-1` 不会与任何真实 `position` 撞车（`createTemplate` 取的是 `MAX(position) + 1`，
+ * 从 0 往上长）。中间那两步之间没有任何读操作，整个互换跑在一个事务里。
+ *
+ * @param exec SQL 执行器
+ * @param currentPosition 要移动的计划当前的位置
+ * @param targetPosition 它要去的位置；**与当前相同时直接返回**，不做任何写入
+ */
+export async function moveTemplate(
+  exec: SqlExecutor,
+  currentPosition: number,
+  targetPosition: number,
+): Promise<void> {
+  if (currentPosition === targetPosition) return;
+
+  await exec.run('BEGIN');
+  try {
+    // 1) 当前行让位：挪到临时位置，`currentPosition` 空出来
+    await exec.run(
+      'UPDATE split_template SET position = ? WHERE position = ?',
+      [-1, currentPosition],
+    );
+    // 2) 原本占着目标位置的那一行补进空出来的位置
+    await exec.run(
+      'UPDATE split_template SET position = ? WHERE position = ?',
+      [currentPosition, targetPosition],
+    );
+    // 3) 被移动的那一行落到目标位置
+    await exec.run(
+      'UPDATE split_template SET position = ? WHERE position = ?',
+      [targetPosition, -1],
+    );
+    await exec.run('COMMIT');
+  } catch (error) {
+    // 回滚自身也可能抛（连接已断之类）。调用方更需要知道「为什么失败」，
+    // 所以回滚的异常吞掉，抛出去的必须是原始异常。
+    try {
+      await exec.run('ROLLBACK');
+    } catch {
+      // 忽略：下面抛原始异常
+    }
+    throw error;
+  }
+}

@@ -18,6 +18,12 @@ import {
   listSets,
   startRest,
 } from '../repositories/setRepo';
+import {
+  createTemplate,
+  deleteTemplate,
+  listTemplates,
+  setTemplateExercises,
+} from '../repositories/templateRepo';
 import { useActiveSession } from './activeSession';
 
 const MINUTE = 60 * 1000;
@@ -318,5 +324,127 @@ describe('resume 恢复练到第几个动作', () => {
     await useActiveSession.getState().resume(exec);
 
     expect(useActiveSession.getState().currentIndex).toBe(0);
+  });
+});
+
+/**
+ * 造一套计划并把它填满动作。返回计划 id。
+ * `names` 决定动作清单，顺序即计划里的顺序。
+ */
+async function setupTemplate(
+  exec: SqlExecutor,
+  templateName: string,
+  exerciseNames: string[],
+): Promise<string> {
+  const template = await createTemplate(exec, templateName);
+  const ids: string[] = [];
+  for (const name of exerciseNames) {
+    const exercise = await createCustomExercise(exec, name, '胸', '杠铃');
+    ids.push(exercise.id);
+  }
+  await setTemplateExercises(exec, template.id, ids);
+  return template.id;
+}
+
+describe('开始新训练时按分化循环取计划', () => {
+  beforeEach(() => {
+    useActiveSession.getState().reset();
+  });
+
+  it('一套计划、一场都没练过时，用第一套', async () => {
+    const exec = await createMigratedExecutor();
+    await setupTemplate(exec, '推日', ['卧推', '飞鸟']);
+
+    await useActiveSession.getState().startNew(exec, null);
+
+    const { session, exercises } = useActiveSession.getState();
+    expect(exercises.map((e) => e.exerciseName)).toEqual(['卧推', '飞鸟']);
+    // 这一场要记住自己是按哪套计划练的，否则下一场推不出该轮到谁
+    expect(session?.templateId).not.toBeNull();
+  });
+
+  it('练完两场之后轮到第三套，第四场绕回第一套', async () => {
+    const exec = await createMigratedExecutor();
+    const push = await setupTemplate(exec, '推日', ['卧推']);
+    const pull = await setupTemplate(exec, '拉日', ['划船']);
+    const legs = await setupTemplate(exec, '腿日', ['深蹲']);
+
+    await useActiveSession.getState().startNew(exec, null);
+    expect(useActiveSession.getState().session?.templateId).toBe(push);
+    await useActiveSession.getState().endWorkout(exec);
+
+    await useActiveSession.getState().startNew(exec, null);
+    expect(useActiveSession.getState().session?.templateId).toBe(pull);
+    await useActiveSession.getState().endWorkout(exec);
+
+    await useActiveSession.getState().startNew(exec, null);
+    expect(useActiveSession.getState().session?.templateId).toBe(legs);
+    expect(useActiveSession.getState().exercises.map((e) => e.exerciseName)).toEqual([
+      '深蹲',
+    ]);
+    await useActiveSession.getState().endWorkout(exec);
+
+    // 循环：第四场回到推日，而不是没有计划可用
+    await useActiveSession.getState().startNew(exec, null);
+    expect(useActiveSession.getState().session?.templateId).toBe(push);
+  });
+
+  it('一套计划都没有时，维持旧行为：复制上一次已结束训练的动作', async () => {
+    const exec = await createMigratedExecutor();
+    await setupFinishedSession(exec, ['深蹲', '卧推']);
+
+    await useActiveSession.getState().startNew(exec, null);
+
+    const { session, exercises } = useActiveSession.getState();
+    expect(exercises.map((e) => e.exerciseName)).toEqual(['深蹲', '卧推']);
+    // 没按任何计划练，所以是 null —— 这样它不会参与轮转
+    expect(session?.templateId).toBeNull();
+  });
+
+  it('startNewWithTemplate 直接用指定的计划，不管轮转轮到谁', async () => {
+    const exec = await createMigratedExecutor();
+    const push = await setupTemplate(exec, '推日', ['卧推']);
+    await setupTemplate(exec, '拉日', ['划船']);
+
+    // 轮转本该给出「推日」，用户主动改选「拉日」
+    const pull = (await listTemplates(exec))[1].id;
+    await useActiveSession.getState().startNewWithTemplate(exec, null, pull);
+
+    expect(useActiveSession.getState().session?.templateId).toBe(pull);
+    expect(useActiveSession.getState().exercises.map((e) => e.exerciseName)).toEqual([
+      '划船',
+    ]);
+    // 推日那套没被动过
+    expect(push).not.toBe(pull);
+  });
+
+  it('计划被删掉之后，轮转回到第一套而不是卡住', async () => {
+    const exec = await createMigratedExecutor();
+    const push = await setupTemplate(exec, '推日', ['卧推']);
+    const pull = await setupTemplate(exec, '拉日', ['划船']);
+
+    await useActiveSession.getState().startNew(exec, null);
+    await useActiveSession.getState().endWorkout(exec);
+    // 第二场用的是 pull，现在把 pull 删掉
+    await useActiveSession.getState().startNew(exec, null);
+    expect(useActiveSession.getState().session?.templateId).toBe(pull);
+    await useActiveSession.getState().endWorkout(exec);
+    await deleteTemplate(exec, pull);
+
+    await useActiveSession.getState().startNew(exec, null);
+    expect(useActiveSession.getState().session?.templateId).toBe(push);
+  });
+
+  it('按计划开训练时，计划里的每个动作都预建了待完成的组', async () => {
+    const exec = await createMigratedExecutor();
+    await setupTemplate(exec, '推日', ['卧推', '飞鸟']);
+
+    await useActiveSession.getState().startNew(exec, null);
+
+    // 和复制上一次那条路径一样：没有待完成的组，「完成这组」会毫无反应
+    for (const item of useActiveSession.getState().exercises) {
+      expect(item.sets.length).toBeGreaterThanOrEqual(1);
+      expect(item.sets.every((s) => s.isCompleted === false)).toBe(true);
+    }
   });
 });
