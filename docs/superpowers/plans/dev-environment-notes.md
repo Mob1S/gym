@@ -156,9 +156,10 @@ node --use-system-ca .superpowers\download.cjs `
 ```powershell
 . .superpowers\build-env.ps1
 $env:EXPO_TOKEN = '<在 expo.dev 生成的 Access Token>'
+$env:EAS_NO_VCS = '1'          # 见下面第 4 条，不加会直接失败
 Set-Location C:\ccproject\gym
 
-# 一次性：建立项目关联（写入 extra.eas.projectId 到 app.json）
+# 一次性：建立项目关联（app.json 的 extra.eas.projectId 已经有了，通常不必再跑）
 eas init --non-interactive --force
 
 # 构建（preview profile 产出 APK）
@@ -166,6 +167,20 @@ eas build --platform android --profile preview --non-interactive
 ```
 
 实测：**上传 25 秒，云端构建约 20 分钟，产出 APK 105MB。**
+
+### 沿路踩的坑（都记在 `build-env.ps1` 里）
+
+1. **`spawn EPERM`**：eas-cli 必须 spawn Expo CLI 读配置。沙箱禁止子进程管道 stdio。**按规则原样重试一次并申请 `danger-full-access`** —— 这不是绕路，是文档规定的正确回应。
+2. **`EPERM: mkdir ...\AppData\Roaming\eas-cli-nodejs`**：**`USERPROFILE` 重定向管不到 `APPDATA` 和 `LOCALAPPDATA`**，Windows 工具独立读它们，必须一并重定向。
+3. **`EIDLETIMEOUT registry.npmjs.org`**：看着像网络挂了，其实 npm 默认空闲超时太短。放宽到 600 秒 + 5 次重试后，**30 秒装完**。
+4. **`git found, but git --help exited with status undefined` → `EAS_NO_VCS=1`。**
+   2026-10-07 实测：`git --help` 在**人开的 shell 里是正常的**（退出码 0），但 eas-cli 一跑它就说退出码 undefined —— 又是 spawn 子进程读输出被拦。eas-cli 拿不到 VCS 信息就直接拒绝启动。
+   加 `EAS_NO_VCS=1` 之后它改成「以当前目录为项目根」，于是**只跳过 git 那几次调用**，`bundle install` 之类的构建步骤不受影响（它们在 Expo 的服务器上跑，不在这台机器上）。
+   注意它同时会提示「不推荐在没有 VCS 的情况下使用」—— 那条可以忽略，但要知道代价：**上传内容由 `.gitignore` 决定**，所以 `node_modules/`、`android/`、`.superpowers/` 仍被排除（本仓库的 `.gitignore` 已经覆盖）。哪天真出问题，第一个要查的就是这里。
+   顺带：`git rev-parse --show-toplevel` 也 spawn 不了，所以别指望用 `EAS_PROJECT_ROOT` 绕 —— 直接 `Set-Location` 到项目根即可。
+5. **`npm install` 会 `EPERM: mkdir '<项目>\node_modules\<包名>'`。**
+   2026-10-07 实测：想在项目里装 `eas-cli` 时撞上这条。**沙箱不但拒绝在工作区外写，也拒绝在 `node_modules` 里新建目录**。而 eas-cli 本来就已经装在 `.superpowers\eas\` 里了 —— **先看看 `.superpowers` 下有没有现成的，不要去装第二个**。
+   同时注意：这台机器的用户级 npm 缓存被指到了工作区**外面**（`npm config get cache` 给的是别的项目的路径），`build-env.ps1` 里那句 `npm_config_cache` 重定向就是为它写的。
 
 ### 查构建状态不用 eas-cli
 
@@ -176,6 +191,19 @@ $env:EXPO_TOKEN = '...'
 node --use-system-ca .superpowers\eas-status.cjs fb768c8d-f89c-4041-98a2-27ebd41527a2
 ```
 
+**历史构建记录（2026-10-07 用这个脚本查到的）**——`gym-tracker` 这个 projectId 下已有三次成功构建：
+
+| 构建 id | 完成时间 |
+|---|---|
+| `ae53be9e-c996-429f-a32d-b6c9782fe382` | 2026-10-04 15:59 |
+| `af62ad3a-5b11-4e4e-abd2-5e22539dfc37` | 2026-10-04 15:26 |
+| `19295e0e-ad37-4837-80bd-ee8b5ed2f73a` | 2026-09-21 11:04 |
+
+> 这条记录顺带纠正了一个**过期结论**：`2026-09-21-workout-lifecycle-design.md` 的 §8 写着
+> 「用户手机上那版是 2026-09-16 19:24 的代码」，并据此推断手机上没有 `react-native-svg`、
+> 也没有那一轮的界面重做。那个推断在**写下的当天**（09-21）是对的，但 10-04 又打过两次包，
+> 文档没有回头改。**判断手机上是什么版本，先查这张表，别信文档里的时间戳推断。**
+
 ### 安装到手机
 
 ```powershell
@@ -183,11 +211,7 @@ adb install -r .superpowers\gym-tracker-preview.apk
 adb shell am start -n com.ccproject.gymtracker/.MainActivity
 ```
 
-### 沿路踩的坑（都记在 `build-env.ps1` 里）
-
-1. **`spawn EPERM`**：eas-cli 必须 spawn Expo CLI 读配置。沙箱禁止子进程管道 stdio。**按规则原样重试一次并申请 `danger-full-access`** —— 这不是绕路，是文档规定的正确回应。
-2. **`EPERM: mkdir ...\AppData\Roaming\eas-cli-nodejs`**：**`USERPROFILE` 重定向管不到 `APPDATA` 和 `LOCALAPPDATA`**，Windows 工具独立读它们，必须一并重定向。
-3. **`EIDLETIMEOUT registry.npmjs.org`**：看着像网络挂了，其实 npm 默认空闲超时太短。放宽到 600 秒 + 5 次重试后，**30 秒装完**。
+（`preview` profile 用的是**同一个远程 keystore**，所以新包可以直接 `-r` 覆盖安装，不必先卸载。）
 
 ---
 
