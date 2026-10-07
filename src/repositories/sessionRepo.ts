@@ -382,3 +382,114 @@ export async function findLatestTemplateId(
   );
   return row?.template_id ?? null;
 }
+
+/**
+ * 删掉一场训练。**不可恢复。**
+ *
+ * 只写一句 `DELETE FROM session`：两个子表的删除由外键的 `ON DELETE CASCADE`
+ * 负责（建表时就写了，`repositories/database.tsx` 每次打开连接都开
+ * `PRAGMA foreign_keys = ON`）。手写三句 DELETE 只会多一份可能与外键不一致的
+ * 逻辑。
+ *
+ * ⚠️ **绝不要写成 `DELETE FROM session WHERE id <> ?` 或带 `NOT IN` 子查询的形式。**
+ * 开着外键时 SQLite 会对 `session` 的删除级联扫 `session_exercise`，而这条
+ * DELETE 自己正在读 `session_exercise` → 报 `database table is locked`。
+ * 按单个 id 删不经过子查询，是安全的。
+ *
+ * @param exec SQL 执行器
+ * @param id 要删的训练
+ * @returns 删除完成后 resolve。**id 不存在时也正常返回**（幂等，不抛错）
+ */
+export async function deleteSession(
+  exec: SqlExecutor,
+  id: string,
+): Promise<void> {
+  await exec.run('DELETE FROM session WHERE id = ?', [id]);
+}
+
+/**
+ * 从一场训练里去掉一个动作，连同它已经记下的组。
+ *
+ * 顺序不能改：先删组再删动作。反过来（靠动作的级联删组）在开着外键时同样会
+ * 触发「正在删父行、又要扫子表」的问题；显式先删子表最省事也最好读。
+ *
+ * 最后一句重排 `position`：被删掉的动作后面的那些整体前移一位，不留空洞。
+ * 空洞本身不会让 `ORDER BY position` 出错，但以后要把动作插到中间（拖拽排序）
+ * 就会错位 —— 是个埋着的坑。
+ *
+ * @param exec SQL 执行器
+ * @param sessionExerciseId 要删掉的 `session_exercise.id`
+ * @returns 一起删掉了多少组（界面在二次确认的文案里要说清这个数）
+ */
+export async function deleteSessionExercise(
+  exec: SqlExecutor,
+  sessionExerciseId: string,
+): Promise<number> {
+  const target = await exec.first<{ session_id: string; position: number }>(
+    'SELECT session_id, position FROM session_exercise WHERE id = ?',
+    [sessionExerciseId],
+  );
+  if (!target) return 0;
+
+  const countRow = await exec.first<{ n: number }>(
+    'SELECT COUNT(*) AS n FROM set_entry WHERE session_exercise_id = ?',
+    [sessionExerciseId],
+  );
+
+  await exec.run('BEGIN');
+  try {
+    await exec.run('DELETE FROM set_entry WHERE session_exercise_id = ?', [
+      sessionExerciseId,
+    ]);
+    await exec.run('DELETE FROM session_exercise WHERE id = ?', [
+      sessionExerciseId,
+    ]);
+    await exec.run(
+      'UPDATE session_exercise SET position = position - 1 WHERE session_id = ? AND position > ?',
+      [target.session_id, target.position],
+    );
+    await exec.run('COMMIT');
+  } catch (error) {
+    // 回滚自身也可能抛，调用方更需要知道「为什么失败」，所以吞掉回滚的异常
+    try {
+      await exec.run('ROLLBACK');
+    } catch {
+      // 忽略：下面抛原始异常
+    }
+    throw error;
+  }
+
+  return Number(countRow?.n ?? 0);
+}
+
+/**
+ * 只删掉一个动作下**还没完成的**占位组，已完成的组与动作本身都留着。
+ *
+ * 用于「这个动作我不想在这一场里继续练了，但**别删我练过的记录**」这条路径：
+ * - 已完成的组留在库里 → 进步曲线的点还在（曲线只认 `is_completed = 1`）；
+ * - 未完成的占位组删掉 → 这个动作的 `sets` 变成空数组，界面的
+ *   「有动作才显示」判断会把它从记录页摘掉，而用户下次 `resume` 这一场时
+ *   它也不会带着一条孤儿占位组冒出来（`completeCurrentSet` 找不到待完成的组
+ *   会静默 return —— 那就是一个点了没反应的假死按钮）。
+ *
+ * **必须删掉占位组**：`completeCurrentSet` 每完成一组都会预建下一组，只删动作
+ * 不删组的话，这条占位组会永远留在库里，而它既不是训练量、也永远不会被完成。
+ *
+ * @param exec SQL 执行器
+ * @param sessionExerciseId 目标动作
+ * @returns 删掉了多少条占位组
+ */
+export async function deleteIncompleteSetsOf(
+  exec: SqlExecutor,
+  sessionExerciseId: string,
+): Promise<number> {
+  const countRow = await exec.first<{ n: number }>(
+    'SELECT COUNT(*) AS n FROM set_entry WHERE session_exercise_id = ? AND is_completed = 0',
+    [sessionExerciseId],
+  );
+  await exec.run(
+    'DELETE FROM set_entry WHERE session_exercise_id = ? AND is_completed = 0',
+    [sessionExerciseId],
+  );
+  return Number(countRow?.n ?? 0);
+}

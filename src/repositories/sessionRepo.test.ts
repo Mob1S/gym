@@ -3,6 +3,9 @@ import type { SqlExecutor } from '../db/types';
 import {
   addExerciseToSession,
   createSession,
+  deleteIncompleteSetsOf,
+  deleteSession,
+  deleteSessionExercise,
   findLastActiveSessionExerciseId,
   finishSession,
   getActiveSession,
@@ -10,8 +13,8 @@ import {
   listSessionExercises,
   listSessions,
 } from './sessionRepo';
-import { createCustomExercise } from './exerciseRepo';
-import { addSet, completeSet } from './setRepo';
+import { createCustomExercise, listExercises } from './exerciseRepo';
+import { addSet, completeSet, listSets } from './setRepo';
 
 describe('sessionRepo', () => {
   it('新建的训练是进行中状态', async () => {
@@ -178,5 +181,98 @@ describe('sessionRepo', () => {
     await addSet(exec, se.id, 100, 5);
 
     expect(await findLastActiveSessionExerciseId(exec, s.id)).toBeNull();
+  });
+});
+
+describe('删除训练记录', () => {
+  /** 造一场「2 个动作、每个动作 2 组已完成」的训练，返回各个 id */
+  async function setupSessionWithSets(exec: SqlExecutor) {
+    const session = await createSession(exec, '腿部日', null);
+    const squat = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
+    const bench = await createCustomExercise(exec, '卧推', '胸', '杠铃');
+    const seSquat = await addExerciseToSession(exec, session.id, squat.id);
+    const seBench = await addExerciseToSession(exec, session.id, bench.id);
+
+    for (const se of [seSquat, seBench]) {
+      for (const weight of [100, 105]) {
+        const set = await addSet(exec, se.id, weight, 5);
+        await completeSet(exec, set.id, Date.now());
+      }
+    }
+    await finishSession(exec, session.id, Date.now());
+    return { session, seSquat, seBench };
+  }
+
+  it('删一场训练，它的动作与组一起消失（靠外键级联）', async () => {
+    const exec = await createMigratedExecutor();
+    const { session, seSquat } = await setupSessionWithSets(exec);
+
+    await deleteSession(exec, session.id);
+
+    expect(await getSession(exec, session.id)).toBeNull();
+    expect(await listSessionExercises(exec, session.id)).toEqual([]);
+    expect(await listSets(exec, seSquat.id)).toEqual([]);
+    // 动作库本身不能被牵连
+    expect(await listExercises(exec)).toHaveLength(2);
+  });
+
+  it('只删掉目标那一场，别的场次一组不少', async () => {
+    const exec = await createMigratedExecutor();
+    const first = await setupSessionWithSets(exec);
+    const second = await setupSessionWithSets(exec);
+
+    await deleteSession(exec, first.session.id);
+
+    expect(await getSession(exec, second.session.id)).not.toBeNull();
+    expect(await listSets(exec, second.seSquat.id)).toHaveLength(2);
+  });
+
+  it('删掉进行中的那一场之后，getActiveSession 返回 null', async () => {
+    const exec = await createMigratedExecutor();
+    // 进行中的那一场：不调 finishSession
+    const session = await createSession(exec, '没结束的训练', null);
+    expect(await getActiveSession(exec)).not.toBeNull();
+
+    await deleteSession(exec, session.id);
+
+    // 首页的「继续训练」就是看这个查询的返回值；不清干净的话它会指向
+    // 一条已经不存在的记录，点进去是一屏空白
+    expect(await getActiveSession(exec)).toBeNull();
+  });
+
+  it('deleteSessionExercise 把组和动作一起删掉，并重排后面的 position', async () => {
+    const exec = await createMigratedExecutor();
+    const { session, seSquat } = await setupSessionWithSets(exec);
+
+    const removedSets = await deleteSessionExercise(exec, seSquat.id);
+
+    expect(removedSets).toBe(2);
+    expect(await listSets(exec, seSquat.id)).toEqual([]);
+    const remaining = await listSessionExercises(exec, session.id);
+    expect(remaining).toHaveLength(1);
+    // 剩下的那个原本是 position 1，删掉 0 之后必须变成 0。
+    // 留着空洞 order by 也还能用，但以后要插到中间就会错位。
+    expect(remaining[0].position).toBe(0);
+  });
+
+  it('deleteIncompleteSetsOf 删掉占位组、留下已完成的组，动作这一条还在', async () => {
+    const exec = await createMigratedExecutor();
+    const { session, seSquat } = await setupSessionWithSets(exec);
+    // `setupSessionWithSets` 造的都是已完成的组，先补一条占位组进去
+    // —— 真实流程里 `completeCurrentSet` 每完成一组都会预建一条
+    await addSet(exec, seSquat.id, 105, 5);
+
+    const removed = await deleteIncompleteSetsOf(exec, seSquat.id);
+
+    expect(removed).toBe(1);
+    const remaining = await listSets(exec, seSquat.id);
+    // 练过的 2 组必须还在：进步曲线只认已完成且属于某场训练的组，
+    // 用户选的是「别删我的记录」，不是「抹掉历史」
+    expect(remaining).toHaveLength(2);
+    expect(remaining.every((s) => s.isCompleted)).toBe(true);
+    // 动作还在，position 也不动 —— 界面靠「这个动作的 sets 为空」把它摘掉
+    expect((await listSessionExercises(exec, session.id)).map((se) => se.id)).toContain(
+      seSquat.id,
+    );
   });
 });
