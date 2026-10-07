@@ -298,7 +298,8 @@ export interface ImportedWorkout {
 | 已经记过组 | 弹窗：**「深蹲」已经记了 3 组** / `[删掉这 3 组] [先留着] [取消]` |
 
 - 「删掉这 3 组」→ `deleteSessionExercise`（组与动作一起消失，`position` 重排）
-- 「先留着」→ `deleteCompletedSetsOf`（组留在库里但界面不再显示；因为进步曲线只认「已完成且属于某场训练」的组，那 3 组仍会出现在曲线上，**这是刻意的**：用户选的就是「别删我的记录」，只是不想这场里再有这个动作）
+- 「先留着」→ `deleteIncompleteSetsOf`：**删掉未完成的占位组，保留已完成的组**，动作那一行留在库里。于是这个动作的 `sets` 变成空数组，界面按「有组才显示」把它摘掉；而进步曲线只认「已完成且属于某场训练」的组，那 3 个点仍在曲线上——**这是刻意的**：用户选的是「别删我的记录」，只是不想这场里再有这个动作。
+  > 未完成的占位组**必须**一起删掉：`completeCurrentSet` 每完成一组都会预建下一组，留着它这个动作的 `sets` 就不为空、界面摘不掉；而下次 `resume` 这一场时它会带着一条永远完不成的占位组回来，用户点「完成这组」毫无反应——一个静默的假死按钮。
 - 「取消」→ 什么都不做
 
 **`exercises.length === 1` 时不显示这个按钮**，避免把最后一项删成空屏。真要在空屏上重来，用户还有「结束训练」——而删光动作再练没有任何意义。
@@ -494,7 +495,7 @@ schema v3 + `templateRepo` + `domain/rotation` + 设置页计划管理 + `startN
 | `src/domain/rotation.ts`（新） | §5.1 |
 | `src/domain/csv.ts`（新） | §5.2 |
 | `src/domain/importRecords.ts`（新） | §5.3 |
-| `src/repositories/sessionRepo.ts` | `deleteSession`、`deleteSessionExercise`、`deleteCompletedSetsOf`、`findLatestTemplateId`、`template_id` 进列清单、`createSession` 多一个参数 |
+| `src/repositories/sessionRepo.ts` | `deleteSession`、`deleteSessionExercise`、`deleteIncompleteSetsOf`、`findLatestTemplateId`、`template_id` 进列清单、`createSession` 多一个参数 |
 | `src/repositories/backupRepo.ts` / `src/domain/backup.ts` | 模板两表进出备份；`BACKUP_VERSION` → 2；**version 1 仍可导入** |
 | `src/store/activeSession.ts` | `removeExercise`；`startNew` 改为轮转优先、无计划时沿用旧逻辑；`currentIndex` 夹取 |
 | `src/components/ExercisePickerModal.tsx`（新） | 从 `app/session/[id].tsx:294-366` 抽出，训练页与手动补记录共用 |
