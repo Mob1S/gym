@@ -19,8 +19,10 @@ import { getActiveSession, listSessions } from '../repositories/sessionRepo';
  * 两条硬规则：
  *  1. **校验先于写入。** 从文件读来的东西在 `validateBackup` 通过之前，一个字节都不写库。
  *  2. **不把异常冒到界面。** 所有失败都返回 `{ ok: false, message }`，`message` 必须
- *     是用户看得懂的中文 —— 一段英文异常栈等于没有错误处理。唯一抛异常的是
- *     `shareBackup`（它的签名是 `Promise<void>`，没有返回值可以携带失败信息）。
+ *     是用户看得懂的中文 —— 一段英文异常栈等于没有错误处理。**只有两个例外**，它们的
+ *     签名里没有地方放失败信息，于是改成抛一条同样已经翻译好的中文 `Error`：
+ *     `shareBackup`（`Promise<void>`）与 `pickTextFile`（`Promise<string | null>`）。
+ *     抛出来的仍然是中文人话，界面直接 `error.message` 弹给用户。
  */
 
 /**
@@ -267,4 +269,57 @@ export async function pickAndImportBackup(
   }
 
   return { ok: true, message: `已导入 ${incoming} 场训练` };
+}
+
+/**
+ * 选一个文件并把它的内容当文本读出来。用于 CSV 导入。
+ *
+ * 与「备份导入」分开：备份那条路要 `JSON.parse` + `validateBackup`，这条要交给
+ * CSV 解析器。两条路共用的只有「选文件 + 读文本」这两步，所以抽出来的正是这两步。
+ *
+ * ⚠️ **它与上面那个 `pickAndImportBackup` 的错误约定不一样，调用方不要互相照抄**：
+ * `pickAndImportBackup` 返回 `{ ok, message }` 且**永不抛异常**（连用户取消都塞在
+ * `message` 里，靠 `CANCELED_MESSAGE` 区分）；而这里的返回值只有「拿到文本」和
+ * 「用户取消」两种状态，没有第三个字段能承载失败原因，于是失败一律抛异常。
+ * 这是有意的：让每个调用点去判 `ok` 比让它 `try/catch` 更啰嗦。
+ *
+ * @returns 文件文本；**用户取消时返回 `null`**（取消不是错误，界面不该弹任何东西）
+ * @throws 打不开文件选择器、读不出文件内容时各抛一条**已经翻译好的中文** `Error`。
+ *         调用方直接读 `error.message` 弹给用户即可，不要再拼一层前缀
+ */
+export async function pickTextFile(): Promise<string | null> {
+  // 1. 选文件。`*/*` 必须留着：Android 上各个文件管理器给 CSV 报的 MIME 五花八门
+  //    （text/csv、application/vnd.ms-excel、application/octet-stream……），
+  //    只写 text/csv 会让用户在自己手机上根本选不中自己的文件。
+  let picked: DocumentPicker.DocumentPickerResult;
+  try {
+    picked = await DocumentPicker.getDocumentAsync({
+      type: ['text/csv', 'text/comma-separated-values', 'text/plain', '*/*'],
+      // 不是可选项：只有复制到 App 缓存目录，我们才拿得到一个能直接读的 file://
+      // 路径（否则是 content:// 的 SAF URI，`File` 读不了）。
+      copyToCacheDirectory: true,
+      multiple: false,
+    });
+  } catch (error) {
+    throw new Error(`没能打开文件选择器（${detail(error)}）`);
+  }
+
+  // 2. 取消不是错误：返回 null，界面据此什么都不做、什么都不弹
+  if (picked.canceled) return null;
+
+  const asset = picked.assets[0];
+  if (!asset) {
+    // 既没取消又没给文件。正常路径下二者必居其一，走到这里说明原生模块给了个
+    // 意外结果 —— 说出来，比让按钮点了像没反应强
+    throw new Error('没有选中任何文件，请再试一次');
+  }
+
+  // 3. 读文件内容
+  try {
+    return await new File(asset.uri).text();
+  } catch (error) {
+    throw new Error(
+      `读不出这个文件的内容，可能它已经被删除或没有访问权限（${detail(error)}）`,
+    );
+  }
 }

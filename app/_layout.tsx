@@ -38,6 +38,9 @@ export default function RootLayout() {
               交给原生导航栏白拿返回手势与安全区处理 */}
           <Stack.Screen name="plan/index" options={{ title: '训练计划' }} />
           <Stack.Screen name="plan/[id]" options={{ title: '编辑计划' }} />
+          {/* 记录管理：CSV 导入与手动补记录共用一个路由（靠 `?mode=` 分），
+              顶部只需要一行标题，交给原生导航栏白拿返回手势与安全区处理 */}
+          <Stack.Screen name="import/index" options={{ title: '添加记录' }} />
         </Stack>
       </ThemePreferenceProvider>
     </DatabaseProvider>

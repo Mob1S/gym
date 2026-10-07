@@ -3890,7 +3890,10 @@ git commit -m "feat(import): 导入预览页与手动补记录表单"
 - `app/(tabs)/history.tsx`：`Platform.OS === 'web'` 时不渲染每行的「删除」按钮
 - `app/history/[id].tsx`：同上，不渲染底部的删除按钮
 - `app/(tabs)/settings.tsx`：「训练计划」与「记录管理」两张卡片整个不渲染；取而代之在「备份」卡片里加一句 —— 只在 web 上显示：`网页预览用的是内置演示数据，计划管理与导入不可用；请在手机上使用这些功能。`
-- `app/(tabs)/index.tsx`：计划卡片不渲染（`plannedId` 在 web 上永远是 null，因为它读的 `listTemplates` 会返回空数组 —— 这条其实是自洽的，**确认一下即可，不必额外加判断**）
+- `app/(tabs)/index.tsx`：**在取数那个 effect 的入口加一句早退**（`if (isWebPreview) return;`），把那两条查询整个跳过。
+  - 不加判断也能「看起来对」：`demoExecutor` 里**没有任何模板相关分支**（只有四张表的分发），`listTemplates` 会落进「未处理的查询」警告并返回空数组 → `plannedId` 永远 null → 卡片本来就不渲染。**但那样每次 focus 都会往控制台刷一条警告**，而网页预览的价值恰恰是「打开就能看清界面有没有问题」——被警告淹没就失去意义了。
+  - 早退之后**必须**把三个 state 设成「没有计划」的那一组值（`setTemplates([])` / `setPlannedId(null)` / `setPlannedNames([])`），否则从别处带着旧值回来时会不一致。
+  - 顺带一句：`demoExecutor.ts` 的文件头说明里也要写上「模板两张表预览里完全没有」，见 Step 2。
 
 **不要**把这些判断写成散在各处的 `Platform.OS === 'web'`——抽一个小工具（`src/lib/preview.ts` 里 `export const isWebPreview = Platform.OS === 'web';`），四个界面 import 同一个常量。理由：将来要给桌面端或别的预览留口子时只改一处。
 

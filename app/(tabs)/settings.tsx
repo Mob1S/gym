@@ -28,11 +28,12 @@ const THEME_MODE_LABELS: { mode: ThemeMode; label: string }[] = [
 ];
 
 /**
- * 设置页：训练计划的入口，备份的导出 / 导入，外加一段组间休息的参考区间。
+ * 设置页：训练计划的入口，备份的导出 / 导入，记录管理（从别的 App 导入 CSV、
+ * 手动补一条记录），外加一段组间休息的参考区间。
  *
  * 这一页做的每件事都动整库（导出读全库、导入换全库），所以两个按钮共用一个
- * `running` 互斥，任何一刻只允许跑一件。「管理训练计划」只跳转，不写库，
- * 不参与这个互斥。
+ * `running` 互斥，任何一刻只允许跑一件。「管理训练计划」与「记录管理」只跳转，
+ * 不写库，不参与这个互斥。
  *
  * 休息参考区间只是一段静态文案：本 App 不做任何基于它的自动计算，
  * 训练后的比较只看用户自己的次数变化。
@@ -220,6 +221,25 @@ export default function SettingsTab() {
           <Text variant="caption" color="textFaint" style={{ marginTop: space.sm }}>
             导入会用自己的备份整体替换当前记录（不是合并），替换后无法撤销。
           </Text>
+        </Card>
+
+        <Card style={{ gap: space.sm }}>
+          <Text variant="title">记录管理</Text>
+          <Text variant="caption" color="textMuted">
+            把你在别的 App 里记过的训练导进来，进步曲线就能接上之前的过程。
+          </Text>
+
+          <Button
+            label="从其他 App 导入（CSV）"
+            variant="secondary"
+            onPress={() => router.push({ pathname: '/import', params: { mode: 'csv' } })}
+            style={{ marginTop: space.sm }}
+          />
+          <Button
+            label="手动添加一条记录"
+            variant="secondary"
+            onPress={() => router.push({ pathname: '/import', params: { mode: 'manual' } })}
+          />
         </Card>
 
         <Card style={{ gap: space.sm }}>
