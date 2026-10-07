@@ -8,6 +8,8 @@ import { getExercise } from '../repositories/exerciseRepo';
 import {
   addExerciseToSession,
   createSession,
+  deleteIncompleteSetsOf,
+  deleteSessionExercise,
   findLastActiveSessionExerciseId,
   findLatestTemplateId,
   finishSession,
@@ -97,6 +99,19 @@ interface ActiveSessionState {
     templateId: string,
   ) => Promise<StartResult>;
   addExercise: (exec: SqlExecutor, exerciseId: string) => Promise<void>;
+  /**
+   * 从这一场训练里去掉一个动作。
+   *
+   * @param exec SQL 执行器
+   * @param sessionExerciseId 要删掉的 `session_exercise.id`（**不是 exerciseId**）
+   * @param mode `'delete'` = 连它已经记下的组一起删；`'keep'` = 只把动作从这一场
+   *   摘掉，组留在库里（进步曲线仍然有那些点）
+   */
+  removeExercise: (
+    exec: SqlExecutor,
+    sessionExerciseId: string,
+    mode: 'delete' | 'keep',
+  ) => Promise<void>;
   setCurrentIndex: (index: number) => void;
   /** 完成当前组的记录，落盘并立刻开始休息计时 */
   completeCurrentSet: (
@@ -378,6 +393,56 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
 
     const exercises = await loadExercises(exec, session.id);
     set({ exercises, currentIndex: exercises.length - 1 });
+  },
+
+  /**
+   * 从这一场训练里去掉一个动作（记录页的「删除『深蹲』」用）。
+   *
+   * 两条分支的差别只在「组删不删」：`'delete'` 连练过的组一起删，`'keep'` 只
+   * 摘掉动作这一场的可见性、练过的组留在库里。**两条分支都要重新载入并按
+   * 「还有没有组」筛一遍** —— 原因见函数内注释。
+   *
+   * @param exec SQL 执行器
+   * @param sessionExerciseId 要删掉的 `session_exercise.id`（**不是 exerciseId**）
+   * @param mode 见接口声明
+   * @returns 删完并刷新 store 后 resolve。训练已结束时**静默返回**，不抛错
+   */
+  removeExercise: async (exec, sessionExerciseId, mode) => {
+    const { session, currentIndex } = get();
+    // 已结束的训练不能再改。正常路径下 `endWorkout` 已经清空 store、
+    // session 为 null，这里挡的是「有人把一场已结束的训练塞回 store」。
+    if (!session || session.finishedAt !== null) return;
+
+    if (mode === 'delete') {
+      await deleteSessionExercise(exec, sessionExerciseId);
+    } else {
+      await deleteIncompleteSetsOf(exec, sessionExerciseId);
+    }
+
+    const loaded = await loadExercises(exec, session.id);
+    // `mode: 'keep'` 时动作那一行还在库里，`loadExercises` 照样把它读回来，
+    // 所以这里要**按「它还有没有组」再筛一次** —— 用户点「先留着」的意思是
+    // 「这一场别再让我看见它」，只删占位组、不筛的话动作会原地不动。
+    //
+    // 判据不是「id 等于被删的那个」：写成 id 比较的话，我们是在用一个内存里的
+    // 假设代替库里的**事实**，也就会出现「内存说摘掉了、库里其实还有占位组」
+    // 这种不一致。
+    //
+    // 也不能用 `sets.length > 0`（「一行 set 都没有」）：`mode: 'keep'` 只删占位组、
+    // 保留练过的组，所以被摘掉的动作在库里不是「没有组」，而是「没有还没完成的组」。
+    // 按后者判，`keep` 之后它正好落选；按前者判，它会带着刚留下的已完成组原地不动
+    // （实测：深蹲 2 条已完成组、0 条待完成，`sets.length > 0` 仍然成立）。
+    const visible = loaded.filter((item) =>
+      item.sets.some((s) => !s.isCompleted),
+    );
+
+    // 指针必须夹回合法范围：删掉的正好是当前聚焦的那个动作时，
+    // `exercises[currentIndex]` 会变成 undefined，记录页掉进「这次训练还没有动作」，
+    // 而库里其实还有别的动作 —— 这种「动作条与屏幕内容对不上」比崩溃更难查。
+    const nextIndex =
+      visible.length === 0 ? 0 : Math.min(currentIndex, visible.length - 1);
+
+    set({ exercises: visible, currentIndex: nextIndex });
   },
 
   /**

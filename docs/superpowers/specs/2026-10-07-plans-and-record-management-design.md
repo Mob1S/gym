@@ -142,8 +142,10 @@ UPDATE session_exercise SET position = position - 1
 
 三句必须按这个顺序，且都由调用方传 `sessionId` 与「被删掉的那个 position」。重排是为了不留空洞——留着空洞 `ORDER BY position` 也还能用，但以后要把动作插到中间（拖拽排序）就会错位，是个埋着的坑。
 
-**新增 `deleteCompletedSetsOf(exec, sessionExerciseId)`**：只删 `set_entry`，用于「先留着」那条分支——把组从界面上摘掉、但仍留在库里。
+**新增 `deleteIncompleteSetsOf(exec, sessionExerciseId)`**：只删 `is_completed = 0` 的那些占位组，用于「先留着」那条分支。
 
+> **实施时的修正**：这一条最初写的是 `deleteCompletedSetsOf`（删光**所有**组、动作留在库里），靠「这个动作 sets 为空」把界面摘掉。但那样会让「先留着」把用户练过的组也删掉——而用户选它的意思恰恰是「**别删我的记录**，只是这一场别再让我看见它」。改成「删占位组、留已完成的组」之后，判据也必须跟着从「sets 为空」改成「**还有没有未完成的组**」（见 §6.2）。
+>
 > 这一句与 `deleteSessionExercise` 的第二句不冲突：`ON DELETE CASCADE` 不会因为「先删了组」而出错。
 
 **`session` 的列清单加 `template_id`：**
@@ -308,8 +310,9 @@ export interface ImportedWorkout {
 | 已经记过组 | 弹窗：**「深蹲」已经记了 3 组** / `[删掉这 3 组] [先留着] [取消]` |
 
 - 「删掉这 3 组」→ `deleteSessionExercise`（组与动作一起消失，`position` 重排）
-- 「先留着」→ `deleteIncompleteSetsOf`：**删掉未完成的占位组，保留已完成的组**，动作那一行留在库里。于是这个动作的 `sets` 变成空数组，界面按「有组才显示」把它摘掉；而进步曲线只认「已完成且属于某场训练」的组，那 3 个点仍在曲线上——**这是刻意的**：用户选的是「别删我的记录」，只是不想这场里再有这个动作。
-  > 未完成的占位组**必须**一起删掉：`completeCurrentSet` 每完成一组都会预建下一组，留着它这个动作的 `sets` 就不为空、界面摘不掉；而下次 `resume` 这一场时它会带着一条永远完不成的占位组回来，用户点「完成这组」毫无反应——一个静默的假死按钮。
+- 「先留着」→ `deleteIncompleteSetsOf`：**删掉未完成的占位组，保留已完成的组**，动作那一行留在库里。界面按「**这个动作还有没有未完成的组**」把它从记录页摘掉；而进步曲线只认「已完成且属于某场训练」的组，那 3 个点仍在曲线上——**这是刻意的**：用户选的是「别删我的记录」，只是不想这场里再有这个动作。
+  > 判据必须是「还有没有**未完成**的组」，不能是「一行 set 都没有」：保留已完成组之后，被摘掉的动作在库里并不是空的。而「还有未完成的组」正是记录页能记下一组的条件（`addExerciseWithFirstSet` 预建第一组、`completeCurrentSet` 完成后立刻预建下一组）——两边用同一条判据，才不会出现「动作条里有它、屏幕上却记不了」的状态。
+  > 未完成的占位组**必须**一起删掉：`completeCurrentSet` 每完成一组都会预建下一组，留着占位组，它下次 `resume` 回来时用户点「完成这组」会毫无反应——一个静默的假死按钮。
 - 「取消」→ 什么都不做
 
 **`exercises.length === 1` 时不显示这个按钮**，避免把最后一项删成空屏。真要在空屏上重来，用户还有「结束训练」——而删光动作再练没有任何意义。
@@ -423,7 +426,7 @@ export interface ImportedWorkout {
 |---|---|
 | `src/repositories/templateRepo.test.ts`（新） | CRUD；`setTemplateExercises` 整体覆盖后顺序正确；删除计划后 `session.template_id` 被置空、剩余 `position` 无空洞 |
 | `src/repositories/importRepo.test.ts`（新） | 同名动作**只建一次**（断言 `exercise` 表新增行数 = 1）；同一场里同名动作合并成一个 `session_exercise`；导入的场次出现在 `listSessionSummaries` 与 `listCompletedSetPoints` 里；**中途失败整体回滚**（构造一条引用不存在动作的记录，断言库里场数与动作数都没变） |
-| `src/repositories/sessionRepo` 相关（扩） | `deleteSession` 连带删掉 `session_exercise` 与 `set_entry`（断言三个表的行数）；删掉进行中的那一场后 `getActiveSession` 返回 `null`；`deleteSessionExercise` 后剩余 `position` 连续；`deleteCompletedSetsOf` 只删组、动作还在 |
+| `src/repositories/sessionRepo` 相关（扩） | `deleteSession` 连带删掉 `session_exercise` 与 `set_entry`（断言三个表的行数）；删掉进行中的那一场后 `getActiveSession` 返回 `null`；`deleteSessionExercise` 后剩余 `position` 连续；`deleteIncompleteSetsOf` 只删未完成的占位组、已完成的组与动作那一行都留着 |
 | `src/store/activeSession.test.ts`（扩） | `removeExercise` 后 `currentIndex` 被夹住（删的正好是当前动作时不出现 `undefined`）；删掉进行中的那一场后 `resume` 返回 false 且库里 `finished_at IS NULL` 计数为 0（沿用既有的不变量测试写法）；`startNew` 在有计划时用轮转结果、无计划时沿用旧逻辑 |
 
 ### 7.3 迁移测试
@@ -485,7 +488,7 @@ export interface ImportedWorkout {
 schema v3 + `templateRepo` + `domain/rotation` + 设置页计划管理 + `startNew` 走轮转 + 首页计划卡片 + 备份格式 1→2。
 
 **M7 · 删除**（验收 2~8）
-`deleteSession` / `deleteSessionExercise` / `deleteCompletedSetsOf` + `removeExercise` + 记录页删除按钮与两条分支 + 历史页左滑与详情页删除 + 进行中那一场的 store 清理。
+`deleteSession` / `deleteSessionExercise` / `deleteIncompleteSetsOf` + `removeExercise` + 记录页删除按钮与两条分支 + 历史页左滑与详情页删除 + 进行中那一场的 store 清理。
 
 **M8 · 导入**（验收 9~11）
 `domain/csv` + `domain/importRecords` + `importRepo` + `ExercisePickerModal` 抽取 + 导入预览页 + 手动补记录表单。

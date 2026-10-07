@@ -448,3 +448,100 @@ describe('开始新训练时按分化循环取计划', () => {
     }
   });
 });
+
+describe('训练中删动作', () => {
+  beforeEach(() => {
+    useActiveSession.getState().reset();
+  });
+
+  /** 开一场训练并加两个动作，A 做完 2 组、B 一组没做 */
+  async function setupTwoExercises(exec: SqlExecutor) {
+    const squat = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
+    const bench = await createCustomExercise(exec, '卧推', '胸', '杠铃');
+    await useActiveSession.getState().startNew(exec, null);
+    await useActiveSession.getState().addExercise(exec, squat.id);
+    await useActiveSession.getState().completeCurrentSet(exec, 100, 5);
+    await useActiveSession.getState().completeCurrentSet(exec, 100, 5);
+    await useActiveSession.getState().addExercise(exec, bench.id);
+    return {
+      sessionId: useActiveSession.getState().session!.id,
+      squatSe: useActiveSession.getState().exercises[0].sessionExercise.id,
+      benchSe: useActiveSession.getState().exercises[1].sessionExercise.id,
+    };
+  }
+
+  it("mode: 'delete' 把动作和它的组一起删掉，清单里不再有它", async () => {
+    const exec = await createMigratedExecutor();
+    const { squatSe, benchSe } = await setupTwoExercises(exec);
+
+    await useActiveSession.getState().removeExercise(exec, squatSe, 'delete');
+
+    const { exercises } = useActiveSession.getState();
+    expect(exercises.map((e) => e.exerciseName)).toEqual(['卧推']);
+    expect(exercises[0].sessionExercise.id).toBe(benchSe);
+    expect(await listSets(exec, squatSe)).toEqual([]);
+  });
+
+  it("mode: 'keep' 时动作从记录页消失，但练过的组留在库里", async () => {
+    const exec = await createMigratedExecutor();
+    const { squatSe } = await setupTwoExercises(exec);
+
+    await useActiveSession.getState().removeExercise(exec, squatSe, 'keep');
+
+    expect(useActiveSession.getState().exercises.map((e) => e.exerciseName)).toEqual([
+      '卧推',
+    ]);
+    // 「先留着」= 练过的 2 组留在库里（进步曲线的点还在），
+    // 未完成的占位组被删掉（否则这个动作的 sets 不为空，界面不会摘掉它，
+    // 下次 resume 还会带着一个点不动的「完成这组」回来）
+    const remaining = await listSets(exec, squatSe);
+    expect(remaining).toHaveLength(2);
+    expect(remaining.every((s) => s.isCompleted)).toBe(true);
+  });
+
+  it('删掉的正好是当前聚焦的动作时，currentIndex 被夹住而不是越界', async () => {
+    const exec = await createMigratedExecutor();
+    const { squatSe } = await setupTwoExercises(exec);
+    // 当前停在第二个动作（卧推）上
+    expect(useActiveSession.getState().currentIndex).toBe(1);
+
+    await useActiveSession.getState().removeExercise(exec, squatSe, 'delete');
+
+    const { exercises, currentIndex } = useActiveSession.getState();
+    // 删掉第一个之后卧推变成第 0 个，指针必须跟着回到合法范围。
+    // 不夹的话 exercises[1] 是 undefined，记录页会掉进
+    // 「这次训练还没有动作」而库里其实还有动作 —— 比崩溃更难查。
+    expect(currentIndex).toBe(0);
+    expect(exercises[currentIndex]).toBeDefined();
+    expect(exercises[currentIndex].exerciseName).toBe('卧推');
+  });
+
+  it('删光最后一个动作时，currentIndex 归 0 且清单为空', async () => {
+    const exec = await createMigratedExecutor();
+    const squat = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
+    await useActiveSession.getState().startNew(exec, null);
+    await useActiveSession.getState().addExercise(exec, squat.id);
+    const se = useActiveSession.getState().exercises[0].sessionExercise.id;
+
+    await useActiveSession.getState().removeExercise(exec, se, 'delete');
+
+    expect(useActiveSession.getState().exercises).toEqual([]);
+    expect(useActiveSession.getState().currentIndex).toBe(0);
+  });
+
+  it('已结束的训练不接受删动作（防御闸门）', async () => {
+    const exec = await createMigratedExecutor();
+    const { sessionId, squatSe } = await setupTwoExercises(exec);
+    await useActiveSession.getState().endWorkout(exec);
+
+    // 模拟「有人绕过状态机，把一场已结束的训练塞回 store」
+    const finished = await getSession(exec, sessionId);
+    useActiveSession.setState({ session: finished });
+    await useActiveSession.getState().removeExercise(exec, squatSe, 'delete');
+
+    // 库里那个动作必须还在
+    expect((await listSessionExercises(exec, sessionId)).map((se) => se.id)).toContain(
+      squatSe,
+    );
+  });
+});
