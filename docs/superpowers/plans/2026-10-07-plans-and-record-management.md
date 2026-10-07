@@ -19,9 +19,9 @@
 - **`ORDER BY` 里凡是有 `started_at` 的地方都必须跟 `rowid DESC`**（或对应的列）：毫秒精度会并列，只用时间排序时 SQLite 退化为扫描顺序，语义就反了。
 - **测试放同目录的 `*.test.ts`**（不是 `__tests__/`），用 `createNodeExecutor()` / `createMigratedExecutor()`（`src/db/__tests__/nodeExecutor.ts`）建库。
 - 每条命令都用 `npx`。
-- **跑 jest 必须加 `--maxWorkers=1`**：本机沙箱禁止子进程管道 stdio，jest 默认的 worker 池会 `spawn EPERM` 直接崩。`--maxWorkers=1` 让测试在主进程内跑，测试集合与断言完全不变。所以命令是 `npx jest --maxWorkers=1`（单个文件时同样加：`npx jest --maxWorkers=1 src/domain/csv.test.ts`）。
-- **测试文件基线是 20 个、断言 245 条**（M6 之前）。任何时刻的「全绿」都要以这个数字为参照来判断有没有人漏跑了文件 —— 别用行数之类的间接统计去数，会数错。
-- **每个 Task 结束必须同时满足：`npx jest --maxWorkers=1` 全绿 + `npx tsc --noEmit` 干净**，然后才提交。
+- 跑测试就是 `npx jest`（全量）或 `npx jest <文件路径>`。**不需要**再手动加 `--maxWorkers=1`：`jest.config.js` 里已经写了 `maxWorkers: 1`，因为在受限沙箱里 jest 默认的 worker 池会 `Error: spawn EPERM` 直接崩（表现是「一条测试都跑不起来」，不是「跑得慢」）。这个选项对断言与测试集合没有任何影响。
+- **测试文件基线是 20 个、断言 245 条**（M6 之前）。任何时刻的「全绿」都要以这个数字为参照来判断有没有人漏跑了文件 —— 别用行数之类的间接统计去数，会数错。**每个 Task 完成后这个数字都会涨，所以别把它当固定期望**：做完一个 Task 就看一眼「有没有失败的 suite / 用例」，那才是有意义的判据。
+- **每个 Task 结束必须同时满足：`npx jest` 全绿 + `npx tsc --noEmit` 干净**，然后才提交。
 - **不要自己跑 `git commit`**：本机 `.git` 目录不可写，会报 `Permission denied`。改完代码、跑绿测试即可，提交由编排者统一处理。
 - 沙箱下 `src/**` 子目录的写入可能被拒（`Access denied`），改文件请用编辑工具而不是命令行重定向。
 
