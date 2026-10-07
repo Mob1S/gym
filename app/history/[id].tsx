@@ -6,6 +6,7 @@ import { SessionSummaryView } from '../../src/components/SessionSummaryView';
 import type { WorkoutSession } from '../../src/domain/types';
 import { deleteSessionConfirmText } from '../../src/lib/deleteConfirm';
 import { formatDate } from '../../src/lib/format';
+import { isWebPreview } from '../../src/lib/preview';
 import { useDatabase } from '../../src/repositories/database';
 import {
   deleteSession,
@@ -30,7 +31,7 @@ import { Button, Screen, Text, space } from '../../src/ui';
  * 所以这一页不引入 `useSafeAreaInsets` —— 两套做法只能选一套，否则会双重留白。
  *
  * @returns 训练名 + 日期两行，接 `SessionSummaryView` 渲染的每一组与休息回顾，
- *   底部是删除入口（只在真取到这一场时渲染）
+ *   底部是删除入口（只在真取到这一场、且不在网页预览时渲染）
  */
 export default function HistoryDetailScreen() {
   const exec = useDatabase();
@@ -178,8 +179,12 @@ export default function HistoryDetailScreen() {
         {/* 只有真取到这一场时才给删除入口：id 是空的、或这条记录已经被删掉时，
             「删除这条记录」按下去没有任何东西可删。
             用 `danger` 变体，与设置页「导入备份」同一档视觉语义 —— 会毁数据的
-            操作在整 App 里长得一样 */}
-        {session ? (
+            操作在整 App 里长得一样。
+
+            **网页预览里整个不渲染**：`demoExecutor` 会把 `deleteSession` 的
+            `DELETE FROM session WHERE id = ?` 当成「清空整表」，点下去看着像
+            没反应。理由与那张清单见 `src/lib/preview.ts`。 */}
+        {session && !isWebPreview ? (
           <Button
             label="删除这条记录"
             variant="danger"

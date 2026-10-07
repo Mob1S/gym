@@ -7,6 +7,7 @@ import {
   pickAndImportBackup,
   shareBackup,
 } from '../../src/lib/backupFile';
+import { isWebPreview } from '../../src/lib/preview';
 import { useDatabase } from '../../src/repositories/database';
 import type { ThemeMode } from '../../src/repositories/settingsRepo';
 import { useActiveSession } from '../../src/store/activeSession';
@@ -34,6 +35,10 @@ const THEME_MODE_LABELS: { mode: ThemeMode; label: string }[] = [
  * 这一页做的每件事都动整库（导出读全库、导入换全库），所以两个按钮共用一个
  * `running` 互斥，任何一刻只允许跑一件。「管理训练计划」与「记录管理」只跳转，
  * 不写库，不参与这个互斥。
+ *
+ * **网页预览里「训练计划」与「记录管理」两张卡片整个不渲染** —— 假库接不住
+ * 它们的语句，留着就是两个点不动的入口；改成在「备份」卡片里说明一句。
+ * 清单与理由见 `src/lib/preview.ts`，那里也写着真机上不受影响。
  *
  * 休息参考区间只是一段静态文案：本 App 不做任何基于它的自动计算，
  * 训练后的比较只看用户自己的次数变化。
@@ -174,18 +179,23 @@ export default function SettingsTab() {
           </View>
         </Card>
 
-        <Card style={{ gap: space.sm }}>
-          <Text variant="title">训练计划</Text>
-          <Text variant="caption" color="textMuted">
-            编排你的分化循环（推日 / 拉日 / 腿日……），开始训练时会按顺序自动轮转。
-          </Text>
-          <Button
-            label="管理训练计划"
-            variant="secondary"
-            onPress={() => router.push('/plan')}
-            style={{ marginTop: space.sm }}
-          />
-        </Card>
+        {/* 「训练计划」这张卡片在网页预览里整个不渲染（下面「记录管理」同理）：
+            `demoExecutor` 里没有模板两张表的分发，点进去是一个空列表加控制台
+            警告。清单与理由见 `src/lib/preview.ts`，替代说明写在「备份」卡片里。 */}
+        {isWebPreview ? null : (
+          <Card style={{ gap: space.sm }}>
+            <Text variant="title">训练计划</Text>
+            <Text variant="caption" color="textMuted">
+              编排你的分化循环（推日 / 拉日 / 腿日……），开始训练时会按顺序自动轮转。
+            </Text>
+            <Button
+              label="管理训练计划"
+              variant="secondary"
+              onPress={() => router.push('/plan')}
+              style={{ marginTop: space.sm }}
+            />
+          </Card>
+        )}
 
         <Card style={{ gap: space.sm }}>
           <Text variant="title">备份</Text>
@@ -221,26 +231,39 @@ export default function SettingsTab() {
           <Text variant="caption" color="textFaint" style={{ marginTop: space.sm }}>
             导入会用自己的备份整体替换当前记录（不是合并），替换后无法撤销。
           </Text>
+
+          {/* 上面两张卡片在网页预览里不渲染，这里得说一句「为什么没了」。
+              只在 web 上显示 —— 真机上这句话纯属噪音 */}
+          {isWebPreview ? (
+            <Text variant="caption" color="textFaint">
+              网页预览用的是内置演示数据，计划管理与导入不可用；请在手机上使用这些功能。
+            </Text>
+          ) : null}
         </Card>
 
-        <Card style={{ gap: space.sm }}>
-          <Text variant="title">记录管理</Text>
-          <Text variant="caption" color="textMuted">
-            把你在别的 App 里记过的训练导进来，进步曲线就能接上之前的过程。
-          </Text>
+        {/* 「记录管理」这张卡片在网页预览里也整个不渲染：CSV 导入与手动补记录
+            最终都走 `importRepo` 那条落库路径，而假库接不住这些语句。
+            替代说明同样在「备份」卡片里。 */}
+        {isWebPreview ? null : (
+          <Card style={{ gap: space.sm }}>
+            <Text variant="title">记录管理</Text>
+            <Text variant="caption" color="textMuted">
+              把你在别的 App 里记过的训练导进来，进步曲线就能接上之前的过程。
+            </Text>
 
-          <Button
-            label="从其他 App 导入（CSV）"
-            variant="secondary"
-            onPress={() => router.push({ pathname: '/import', params: { mode: 'csv' } })}
-            style={{ marginTop: space.sm }}
-          />
-          <Button
-            label="手动添加一条记录"
-            variant="secondary"
-            onPress={() => router.push({ pathname: '/import', params: { mode: 'manual' } })}
-          />
-        </Card>
+            <Button
+              label="从其他 App 导入（CSV）"
+              variant="secondary"
+              onPress={() => router.push({ pathname: '/import', params: { mode: 'csv' } })}
+              style={{ marginTop: space.sm }}
+            />
+            <Button
+              label="手动添加一条记录"
+              variant="secondary"
+              onPress={() => router.push({ pathname: '/import', params: { mode: 'manual' } })}
+            />
+          </Card>
+        )}
 
         <Card style={{ gap: space.sm }}>
           <Text variant="title">组间休息的一般参考</Text>

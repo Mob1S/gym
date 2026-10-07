@@ -4,6 +4,7 @@ import type { SqlExecutor } from '../db/types';
 import { findStaleRest } from '../domain/rest';
 import { nextTemplateIndex } from '../domain/rotation';
 import type { SessionExercise, SetEntry, WorkoutSession } from '../domain/types';
+import { isWebPreview } from '../lib/preview';
 import { getExercise } from '../repositories/exerciseRepo';
 import {
   addExerciseToSession,
@@ -264,6 +265,18 @@ async function addExerciseWithFirstSet(
  *   「复制上一次的动作清单」
  */
 async function resolveNextTemplateId(exec: SqlExecutor): Promise<string | null> {
+  // 网页预览里直接当作「一套计划都没有」。
+  //
+  // 预览用的是 `db/demoExecutor.ts` —— 一个按 SQL 形态分发的内存假库，里面
+  // **没有模板两张表的任何分支**，这两条查询会落进它的「未处理的查询」警告并
+  // 返回空数组。所以早退与不早退**结果一样**（都退回「复制上一次的动作清单」，
+  // 预览里那正是期望的行为），差别只在控制台干净不干净。
+  //
+  // 而预览的价值就是打开就能看清界面有没有问题 —— 每按一次「开始训练」就刷一条
+  // 警告会把它淹掉。界面那边（`app/(tabs)/index.tsx`）也有同样的早退，两处都要有：
+  // 少任何一处，那条警告还是会从另一个入口冒出来。
+  if (isWebPreview) return null;
+
   const [templates, lastTemplateId] = await Promise.all([
     listTemplates(exec),
     findLatestTemplateId(exec),

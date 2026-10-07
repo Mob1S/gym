@@ -21,6 +21,11 @@ import type { SqlExecutor } from './types';
  * - 只有 `SqlExecutor` 的调用方（`src/repositories/`）能用它，且只有写死的那些语句能用；
  * - **绝不能**把它当成生产实现 —— 真机走的是 `expo-sqlite` 那条路；
  * - 它只在 `database.web.tsx` 里被引用，而那个文件只在 web 平台被打包。
+ * - 分化计划（`split_template` / `template_exercise`）这两张表预览里**完全没有**：
+ *   它们的语句会落进下面的「未知的表」警告。
+ * - `DELETE FROM session WHERE id = ?` 会先命中「清空整表」那条分支。
+ * 所以删记录、计划管理、导入这三处入口在网页预览里是**隐藏**的
+ * （见 `src/lib/preview.ts`），而不是让用户点一个没反应的按钮。
  *
  * 这么做的收益是：不必为一个预览引入 SQLite 的 WASM 依赖，也就避开了
  * 「网页预览能不能跑」受制于网络能否装包。

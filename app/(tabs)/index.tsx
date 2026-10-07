@@ -5,6 +5,7 @@ import { Alert, Modal, Pressable, View } from 'react-native';
 import { nextTemplateIndex } from '../../src/domain/rotation';
 import { formatDateTime } from '../../src/lib/format';
 import { keepScreenAwake } from '../../src/lib/keepAwake';
+import { isWebPreview } from '../../src/lib/preview';
 import { describeExercises } from '../../src/lib/sessionLabel';
 import { useDatabase } from '../../src/repositories/database';
 import { findLatestTemplateId } from '../../src/repositories/sessionRepo';
@@ -83,6 +84,20 @@ export default function TrainTab() {
 
   // 算「今天该练哪套」，并把它那套的动作名一起取回来填进卡片。
   useEffect(() => {
+    // 网页预览里这两条查询整个跳过。`demoExecutor` 是按 SQL 形态分发的假库，
+    // 它没有任何模板相关分支：`listTemplates` 会落进「未处理的查询」警告并返回
+    // 空数组 —— 卡片本来就不会渲染，但每次 focus 都会往控制台刷一条警告，而
+    // 预览的价值恰恰是「打开就能看清界面有没有问题」。
+    //
+    // 早退时**三个 state 必须一起**设成「没有计划」的那一组：只清一半的话，
+    // 从别处带着旧值回来时卡片会指着一个不存在的计划。见 `src/lib/preview.ts`。
+    if (isWebPreview) {
+      setTemplates([]);
+      setPlannedId(null);
+      setPlannedNames([]);
+      return;
+    }
+
     // 有进行中的训练时这张卡片根本不渲染，一次库都不用查
     if (current) return;
     // `loading` 期间 store 里可能还留着一场没结束的训练没被 resume 装回来

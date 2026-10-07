@@ -10,7 +10,8 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "test": "jest --runInBand",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "verify:e2e": "jest --runInBand --testMatch \"**/verify/*.test.ts\" --testPathIgnorePatterns \"/node_modules/\""
   },
   "dependencies": {
     "@expo/ui": "~57.0.18",

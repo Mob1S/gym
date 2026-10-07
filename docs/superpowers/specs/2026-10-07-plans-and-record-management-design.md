@@ -478,6 +478,46 @@ export interface ImportedWorkout {
 
 **推荐第 3 条**：预览的价值是看界面，不是一个点不动的按钮。实施时在 `Platform.OS === 'web'` 下隐藏这三个入口，并在 `demoExecutor.ts` 开头的说明里加一句「哪些功能预览里不可用」。这件事**单列一个小任务**，不要混在功能实现里。
 
+**落实记录（Task 17）**：选了第 3 条。四个界面 import 同一个常量 `isWebPreview`，没有把判断散在各处：`app/(tabs)/history.tsx` 不渲染行内的「删除」按钮，`app/history/[id].tsx` 不渲染底部的「删除这条记录」，`app/(tabs)/settings.tsx` 的「训练计划」与「记录管理」两张卡片整个不渲染（改为在「备份」卡片里加一句只在 web 上显示的说明），`app/(tabs)/index.tsx` 在取计划那个 effect 的入口早退，并把 `templates` / `plannedId` / `plannedNames` 一并设成「没有计划」的那组值。`demoExecutor.ts` **只改了文件头的说明**，一条分发分支都没补 —— 那个假库不值得为预览再补一套 SQL 分支。
+
+> **实施时的一处修正：常量不能用 `Platform.OS === 'web'` 写在单个文件里。**
+> 那需要 `import { Platform } from 'react-native'`，而 react-native 的入口是 ESM ——
+> jest 的 `testEnvironment` 是 `node`，加载不了它，于是**任何间接 import 这个常量的
+> 模块都会在测试里炸**（实测：`src/store/activeSession.ts` 引了它，整个
+> `activeSession.test.ts` 直接跑不起来）。
+>
+> 改成**平台解析**：`src/lib/preview.ts` 里 `isWebPreview = false`（无任何 import，
+> node 下安全），`src/lib/preview.web.ts` 里为 `true`，Metro 打包时优先取 `.web.ts`。
+> 这与仓库里 `repositories/database.tsx` / `database.web.tsx` 用的是同一套机制。
+>
+> `src/store/activeSession.ts` 里也补了一处早退：`startNew` 内部同样会查
+> `listTemplates` / `findLatestTemplateId`，只处理界面那一处的话，预览里按一次
+> 「开始训练」仍会刷一条「未处理的查询」警告。两处都要有 —— 少任何一处，
+> 警告还是会从另一个入口冒出来。
+
+**真机验收：一项都没做，全是「未做」。** 这次收尾所在的机器上 `adb devices` 是空的（没有连接任何设备），所以 §7.4 那张表的 **12 项全部未做**，不只是「本来就要在手机上跑」的那几项。上面这些改动只经过 `npx tsc --noEmit` 与 `npx jest`（25 个测试文件 / 304 条断言，全绿）的**静态自查**；**静态自查不等于验收**，它不代表任何一项已经在真机上通过，也不能替代上面第 1 条那条路。
+
+**补做的一层验证：端到端回归（`npm run verify:e2e`）。**
+
+实施过程中发现一个覆盖盲区：`src/` 下的 304 条断言**全部是分层的**（仓储测仓储、store 测 store、纯函数测纯函数），而**没有任何一个测试覆盖「用户实际走的那条链」**。例如「按计划开训练 → 练完 → 结束 → 再看轮转」跨了 `domain/rotation` / `templateRepo` / `sessionRepo` / `setRepo` / `store/activeSession` 五处。分层全绿仍然可能因为层与层之间的假设不一致而整体坏掉。
+
+于是补了 `verify/e2e.test.ts`：在真实 SQLite（`node:sqlite`）上把五条主旅程串起来跑，33 项断言。它跑在 `src/` 之外，所以 `npx jest` 不会带上它（不拖慢日常反馈），需要时用 `npm run verify:e2e`。
+
+| 旅程 | 断言要点 |
+|---|---|
+| 分化轮转 | 连开四场依次用 推/拉/腿/**推**（真的绕回）；按计划开的那一场动作清单就是计划里的那几个 |
+| 训练中删动作 | 两条分支的结果；**记过 2 组的动作选「先留着」后仍从记录页消失、而那 2 组仍在库里、占位组被删掉**；删完 `position` 重排成 0,1；历史里组数正确 |
+| 导入旧记录 | 导入 3 场后深蹲曲线上的点 = 本机 2 + 导入 6，且**最早的点是旧记录的时间**；只新建 1 个自定义动作；删掉其中一场后曲线少 2 个点 |
+| 不建计划的用户 | 行为与升级前逐项一致（复制上一次的动作、`templateId` 为 null）；删一场不影响另一场 |
+| 删计划 | 上移真的换位；删计划后历史仍在、只是不再指向任何计划、`position` 无空洞；下一场轮转回到第一套 |
+
+它**不覆盖**渲染、手势、原生模块，也覆盖不到真机上 `expo-sqlite` 与 `node:sqlite` 的实现差异 —— **不能替代真机验收**。
+
+> 这条链第一次跑就抓出了一个分层测试没抓到的问题：`keep` 之后「已记过组的动作」
+> 摘不掉。根因是判据写成了「这个动作一行 set 都没有」，而 `keep` 会**保留**已完成的组，
+> 条件恒不成立 —— 当时分层测试里那条用例也写错了同一个判据，两边同时错的时候只有
+> 端到端能发现。这也是它值得留在仓库里的理由。
+
 ---
 
 ## 10. 实施拆分

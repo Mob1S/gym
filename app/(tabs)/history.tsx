@@ -11,6 +11,7 @@ import {
 
 import { deleteSessionConfirmText } from '../../src/lib/deleteConfirm';
 import { formatDate } from '../../src/lib/format';
+import { isWebPreview } from '../../src/lib/preview';
 import { useDatabase } from '../../src/repositories/database';
 import {
   deleteSession,
@@ -172,6 +173,7 @@ export default function HistoryTab() {
    *
    * @param item `listSessionSummaries` 返回的一行（已按时间倒序）
    * @returns 可点击的一行；点进去是该场的详情页，右侧的「删除」是另一个入口
+   *   （网页预览里不渲染，见 `src/lib/preview.ts`）
    */
   const renderItem = useCallback(
     ({ item }: { item: SessionSummary }) => (
@@ -210,18 +212,24 @@ export default function HistoryTab() {
             要么得为预览另写一套手势。一个常驻的小按钮代价只是不够时髦。
 
             按钮嵌在整行那个 Pressable 里面：内层按下的那一刻就成了手势响应者，
-            点「删除」不会顺带把外层那一行的详情页也推进去。 */}
-        <Pressable
-          onPress={() => confirmDelete(item)}
-          accessibilityRole="button"
-          accessibilityLabel={`删除 ${item.name ?? '未命名训练'}`}
-          hitSlop={12}
-          style={styles.deleteButton}
-        >
-          <Text variant="caption" style={styles.deleteText}>
-            删除
-          </Text>
-        </Pressable>
+            点「删除」不会顺带把外层那一行的详情页也推进去。
+
+            **网页预览里整个不渲染**：`demoExecutor` 会把 `deleteSession` 的
+            `DELETE FROM session WHERE id = ?` 当成「清空整表」，点下去看着像
+            没反应。理由与那张清单见 `src/lib/preview.ts`。 */}
+        {isWebPreview ? null : (
+          <Pressable
+            onPress={() => confirmDelete(item)}
+            accessibilityRole="button"
+            accessibilityLabel={`删除 ${item.name ?? '未命名训练'}`}
+            hitSlop={12}
+            style={styles.deleteButton}
+          >
+            <Text variant="caption" style={styles.deleteText}>
+              删除
+            </Text>
+          </Pressable>
+        )}
       </Pressable>
     ),
     [confirmDelete, router, styles],
