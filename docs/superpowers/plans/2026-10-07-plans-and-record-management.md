@@ -3240,7 +3240,10 @@ describe('normalizeExerciseName', () => {
     // 不归一化的话「卧推（窄距）」和「卧推(窄距)」会变成两个动作，
     // 进步曲线被切成两段 —— 这是导入功能最容易踩、事后最难修的坑。
     expect(normalizeExerciseName('卧推（窄距）')).toBe('卧推(窄距)');
-    expect(normalizeExerciseName('Ｂｅｎｃｈ')).toBe('Bench');
+    // 全角转半角与大小写折叠是**两件事**：`Ｂｅｎｃｈ` 先变成 `Bench`，再折叠成
+    // `bench`。这里写 `'bench'`（实施时发现原稿写的 `'Bench'` 是笔误）——
+    // 写成 `'Bench'` 会让人以为这一步不折叠大小写，而下面那条测试又要求折叠。
+    expect(normalizeExerciseName('Ｂｅｎｃｈ')).toBe('bench');
   });
 
   it('英文统一小写，大小写不同的同一个动作归一成一样', () => {
@@ -3474,6 +3477,10 @@ describe('importWorkouts', () => {
     const result = await importWorkouts(exec, [
       workout({
         startedAt: T0 + DAY,
+        // `finishedAt` **必须跟着顺延**。helper 的默认值是 `T0 + 3_600_000`，
+        // 只改 `startedAt` 的话就会造出「结束早于开始」，被校验层整批拒绝 ——
+        // 而这恰恰说明校验层是对的（实施时这一条就是这么红的）。
+        finishedAt: T0 + DAY + 3_600_000,
         exercises: [{ name: 'Ｂｅｎｃｈ　Ｐｒｅｓｓ', sets: [{ weight: 62.5, reps: 8 }] }],
       }),
     ]);
@@ -3485,18 +3492,27 @@ describe('importWorkouts', () => {
     expect(new Set(points.map((p) => p.exerciseId)).size).toBe(1);
   });
 
-  it('导进来的每个动作都预建了一条待完成的组占位', async () => {
+  it('导进来的每一组都直接是已完成，不留下任何占位组', async () => {
     const exec = await createMigratedExecutor();
 
     await importWorkouts(exec, [workout()]);
 
-    // 和本机练出来的一场一样：用户要是想接着这场补记，界面得找得到「该记哪一组」。
-    // 不过导入的场次已经 finished，记录页不会打开它 —— 这条是防将来有人
-    // 把导入的场次做成「进行中」的。
+    const total = await exec.first<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM set_entry',
+    );
     const unfinished = await exec.first<{ n: number }>(
       'SELECT COUNT(*) AS n FROM set_entry WHERE is_completed = 0',
     );
-    expect(Number(unfinished?.n ?? 0)).toBe(1);
+    // 导入的场次 finished_at 非空，记录页根本不会打开它（有写保护），所以**不需要**
+    // 预建占位组。凭空补一条 is_completed = 0 的行反而是编造数据：它没有真实的
+    // 重量与次数（只能写 0/0），而 set_entry 里每一行都该是用户真的做过的一组。
+    // 这条断言同时挡住「将来有人为了复用记录页而给导入的场次补占位」。
+    //
+    // 实施时发现：这一条原本写的是「每个动作都预建了一条待完成的组占位」并断言等于 1，
+    // 与规格（§4.3：导入的组一律 is_completed = 1）直接冲突 —— 是**测试写错了**，
+    // 实现是对的。改测试、不改实现。
+    expect(Number(total?.n ?? 0)).toBe(1);
+    expect(Number(unfinished?.n ?? 0)).toBe(0);
   });
 
   it('中途失败时整体回滚：库里一行都不多', async () => {
@@ -3698,7 +3714,12 @@ git commit -m "feat(import): 导入落库（动作名只建一次、整批一个
 - Modify: `src/lib/backupFile.ts`（加一个「选文件并读文本」的函数，或复用现有的选文件逻辑）
 
 **Interfaces:**
-- Consumes: Task 14 `parseWorkoutCsv` / `ImportedWorkout`、Task 15 `importWorkouts`、Task 13 `ExercisePickerModal`、`Stepper`（`src/components/Stepper.tsx`）
+- Consumes:
+  - Task 14：`parseWorkoutCsv(text)` → `CsvParseResult`（`workouts` / `skipped` / `detected` / **`poundsConverted`**）
+  - Task 15：`importWorkouts(exec, workouts)` → `ImportResult`；`normalizeExerciseName(name)`（预览里算「哪些动作本机没有」**必须复用它**，不要自己再写一遍比较逻辑）
+  - Task 15 与界面：`ImportedWorkout` **从 `../domain/importRecords`（或 `./importRecords`）import**，不要从 `csv` import
+  - Task 12 已提交的 `formatDateFull`（`src/lib/format.ts`）→ 预览页那行「时间范围 2023年4月8日 ~ 2024年1月12日」就用它，**不要新写一个日期格式化**
+  - `listExercises`（`exerciseRepo`）、`ExercisePickerModal`（Task 13）、`Stepper`（`src/components/Stepper.tsx`）、`useDatabase`
 - Produces: 无（终端界面）
 
 - [ ] **Step 1: 看现有的选文件实现**
@@ -3719,6 +3740,14 @@ export async function pickTextFile(): Promise<string | null>;
 ```
 
 照着 `pickAndImportBackup` 里现有的 `DocumentPicker` 选项写（`type: ['text/csv', 'text/comma-separated-values', 'text/plain', '*/*']` —— **`*/*` 要留着**：Android 上不同文件管理器给 CSV 报的 MIME 五花八门，只写 `text/csv` 会让用户根本选不中自己的文件）。
+
+具体三步照抄那个函数（`src/lib/backupFile.ts:174-206`）：
+
+1. `await DocumentPicker.getDocumentAsync({ type: [...], copyToCacheDirectory: true, multiple: false })`，用 `try/catch` 包住 —— 失败时抛 `new Error(\`没能打开文件选择器（${detail(error)}）\`)`。`copyToCacheDirectory: true` 不是可选项：只有复制到 App 缓存目录，我们才拿得到一个能直接读的 `file://` 路径，否则是 `content://` 的 SAF URI，`File` 读不了。
+2. `if (picked.canceled) return null;` —— **取消不是错误**，界面不该弹任何东西。
+3. `raw = await new File(asset.uri).text()`，失败抛一条已翻译的中文错误（照抄那句「读不出这个文件的内容，可能它已经被删除或没有访问权限（…）」的写法）。
+
+注意与备份那条路的**契约差异**：`pickAndImportBackup` 是 `{ ok, message }`、**永不抛异常**；而 `pickTextFile` 按上面的约定是「返回文本或 null、失败抛异常」。这是有意的 —— 它只有两个返回值能表达的状态（拿到 / 取消），抛异常比让每个调用点判 `ok` 更短。但因此**它必须在同一个文件里与备份那条路并列存在、并在 JSDoc 里写明这个差异**，否则下一个人会以为这两个函数的错误约定是一样的。
 
 - [ ] **Step 2: 写导入页**
 
