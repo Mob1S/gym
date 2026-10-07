@@ -2,6 +2,8 @@ import type {
   Exercise,
   SessionExercise,
   SetEntry,
+  SplitTemplate,
+  TemplateExercise,
   WorkoutSession,
 } from './types';
 
@@ -18,14 +20,27 @@ import type {
 /** 固定字符串，用来识别「这是不是本 App 导出的文件」 */
 export const BACKUP_FORMAT = 'gym-tracker-backup';
 
-/** 备份格式版本。读到比它大的版本必须拒绝，不能静默降级读取 */
-export const BACKUP_VERSION = 1;
+/**
+ * 备份格式版本。
+ *
+ * v1 只带四张表（动作/训练/训练动作/组）。
+ * v2 多带分化计划两张表与 `session.templateId`。
+ *
+ * **v1 的文件必须一直能导入**（见 `validateBackup` 里对缺失字段的容忍）：
+ * 用户手上已经导出的备份不能因为 App 升级就作废 —— 那比新功能没做更严重。
+ * 读到比当前**更大**的版本仍然拒绝，绝不能猜着读。
+ */
+export const BACKUP_VERSION = 2;
 
 export interface BackupData {
   exercises: Exercise[];
   sessions: WorkoutSession[];
   sessionExercises: SessionExercise[];
   sets: SetEntry[];
+  /** 分化计划。**v1 的老文件里没有这个数组**，读到时按空数组处理 */
+  templates: SplitTemplate[];
+  /** 计划里的动作。同上 */
+  templateExercises: TemplateExercise[];
 }
 
 export interface BackupFile {
@@ -45,7 +60,7 @@ export type BackupValidation =
  * 校验的门在 `validateBackup`（读别人的文件时才需要）。
  */
 /**
- * @param data 四张表的全部实体，直接来自 `backupRepo.exportAll`
+ * @param data 六张表的全部实体，直接来自 `backupRepo.exportAll`
  * @param schemaVersion 导出时库的结构版本（各仓储之上的 `SCHEMA_VERSION`）
  * @param exportedAt 导出时刻的时间戳；**同时决定备份文件名**，所以由调用方
  *                   传入同一个值，别让文件内容和文件名各读一次时钟
@@ -293,6 +308,25 @@ function normalizeSession(raw: unknown, index: number): FieldResult<WorkoutSessi
   const note = takeNullableString(raw, 'note', `${label} 的 note`);
   if (!note.ok) return note;
 
+  // 老备份（version 1）里没有 templateId 字段，缺失按 null 处理。
+  // 这里刻意不用 takeNullableString：那个要求字段必须存在且显式为 null，
+  // 对 v1 文件会直接判失败 —— 等于把老备份全废掉。
+  //
+  // 也不能写成「读出来直接塞进返回值」：那样一个数字或对象会**静默**进库
+  // （JSON 里任何类型都能是任何东西），之后轮转把它们当 id 比较永远不相等，
+  // 表现为「计划莫名其妙不轮转了」。类型不合法要按下面这样显式失败。
+  const rawTemplateId = raw.templateId;
+  let templateId: string | null = null;
+  if (rawTemplateId !== undefined && rawTemplateId !== null) {
+    if (typeof rawTemplateId !== 'string' || rawTemplateId.length === 0) {
+      return {
+        ok: false,
+        reason: `${label} 的 templateId 必须是非空字符串或 null（收到 ${describe(rawTemplateId)}）`,
+      };
+    }
+    templateId = rawTemplateId;
+  }
+
   return {
     ok: true,
     value: {
@@ -301,7 +335,7 @@ function normalizeSession(raw: unknown, index: number): FieldResult<WorkoutSessi
       startedAt: startedAt.value,
       finishedAt: finishedAt.value,
       note: note.value,
-      templateId: null,
+      templateId,
     },
   };
 }
@@ -408,6 +442,68 @@ function normalizeSet(raw: unknown, index: number): FieldResult<SetEntry> {
 }
 
 /**
+ * @param raw `data.templates` 里的第 index 项
+ * @param index 从 0 开始的下标，用来拼「第 N 条」
+ * @returns 规范化后的 `SplitTemplate`；`createdAt` 是有限数字，`position` 是整数
+ */
+function normalizeSplitTemplate(raw: unknown, index: number): FieldResult<SplitTemplate> {
+  const label = `data.templates 第 ${index + 1} 条`;
+  if (!isPlainObject(raw)) {
+    return { ok: false, reason: `${label} 必须是对象（收到 ${describe(raw)}）` };
+  }
+  const id = takeString(raw, 'id', `${label} 的 id`);
+  if (!id.ok) return id;
+  const name = takeString(raw, 'name', `${label} 的 name`);
+  if (!name.ok) return name;
+  const position = takeInteger(raw, 'position', `${label} 的 position`);
+  if (!position.ok) return position;
+  const createdAt = takeFiniteNumber(raw, 'createdAt', `${label} 的 createdAt`);
+  if (!createdAt.ok) return createdAt;
+  return {
+    ok: true,
+    value: {
+      id: id.value,
+      name: name.value,
+      position: position.value,
+      createdAt: createdAt.value,
+    },
+  };
+}
+
+/**
+ * @param raw `data.templateExercises` 里的第 index 项
+ * @param index 从 0 开始的下标，用来拼「第 N 条」
+ * @returns 规范化后的 `TemplateExercise`；它引用的 templateId/exerciseId
+ *          是否存在由 `validateBackup` 的引用完整性检查负责，这里只看类型
+ */
+function normalizeTemplateExercise(
+  raw: unknown,
+  index: number,
+): FieldResult<TemplateExercise> {
+  const label = `data.templateExercises 第 ${index + 1} 条`;
+  if (!isPlainObject(raw)) {
+    return { ok: false, reason: `${label} 必须是对象（收到 ${describe(raw)}）` };
+  }
+  const id = takeString(raw, 'id', `${label} 的 id`);
+  if (!id.ok) return id;
+  const templateId = takeString(raw, 'templateId', `${label} 的 templateId`);
+  if (!templateId.ok) return templateId;
+  const exerciseId = takeString(raw, 'exerciseId', `${label} 的 exerciseId`);
+  if (!exerciseId.ok) return exerciseId;
+  const position = takeInteger(raw, 'position', `${label} 的 position`);
+  if (!position.ok) return position;
+  return {
+    ok: true,
+    value: {
+      id: id.value,
+      templateId: templateId.value,
+      exerciseId: exerciseId.value,
+      position: position.value,
+    },
+  };
+}
+
+/**
  * 在同一个数组里找重复的 id，找到就给出理由（带表名、id、第几条）。
  *
  * 为什么必须单独查一遍：重复 id 的记录**引用完整性是过得去的**（引用集合用
@@ -415,7 +511,7 @@ function normalizeSet(raw: unknown, index: number): FieldResult<SetEntry> {
  * 用户看到的却是 SQL 层错误。按「校验失败必须给出能直接弹给用户的中文理由」，
  * 得在这里拦下来。
  *
- * 只查数组内部：四张表的主键互不相干，不同数组之间 id 同名是合法的。
+ * 只查数组内部：六张表的主键互不相干，不同数组之间 id 同名是合法的。
  */
 /**
  * @param items 同一个数组里的全部记录
@@ -462,6 +558,28 @@ function normalizeList<T>(
 }
 
 /**
+ * 读一个「老备份里没有」的数组字段：**缺失（undefined）按空数组处理**，
+ * 其余情况照 `normalizeList` 严格校验（是数组就逐条看类型，不是数组就失败）。
+ *
+ * 为什么单独一个函数而不是在调用处写三元：这是「v1 老备份仍能导入」这条硬要求
+ * 的**唯一**实现点，命名出来才好找、才好改。注意 `null` 不在此列 ——
+ * 显式写了 `"templates": null` 说明文件被改坏了，按老备份放过去只会掩盖问题。
+ *
+ * @param data 备份的 `data` 对象
+ * @param key 数组的字段名
+ * @param normalize 单条记录的规范化函数
+ * @returns 规范化后的数组；字段缺失时是空数组
+ */
+function normalizeOptionalList<T>(
+  data: Record<string, unknown>,
+  key: string,
+  normalize: (raw: unknown, index: number) => FieldResult<T>,
+): FieldResult<T[]> {
+  if (data[key] === undefined) return { ok: true, value: [] };
+  return normalizeList(data, key, normalize);
+}
+
+/**
  * 校验一份「从文件里读出来的」东西。只读不写：不碰数据库，也不改 input。
  *
  * 覆盖的失败：
@@ -470,10 +588,11 @@ function normalizeList<T>(
  *   3. version 不是正整数
  *   4. version 比当前新 —— 拒绝，不能按旧格式降级读取
  *   5. data 不是对象
- *   6. 四个数组缺任何一个 / 不是数组
+ *   6. 六个数组：前四个缺任何一个 / 不是数组都算失败；后两个
+ *      （`templates` / `templateExercises`）**缺失按空数组**，因为 v1 的老备份里没有它们
  *   7. 每条记录的字段类型不对（理由带上第几条的哪个字段）
  *   8. 同一个数组里 id 重复（引用完整性拦不住它，但导入时会撞主键）
- *   9. 引用完整性：孤儿 sessionExercise / 孤儿 set
+ *   9. 引用完整性：孤儿 sessionExercise / 孤儿 set / 孤儿 templateExercise
  *  10. 通过时返回规范化对象，多余的字段不透传
  */
 /**
@@ -521,7 +640,7 @@ export function validateBackup(input: unknown): BackupValidation {
     return fail(`data 必须是对象（收到 ${describe(data)}）`);
   }
 
-  // 6 + 7. 四个数组齐不齐，以及每条记录的字段类型
+  // 6 + 7. 六个数组齐不齐，以及每条记录的字段类型
   const exercises = normalizeList(data, 'exercises', normalizeExercise);
   if (!exercises.ok) return fail(exercises.reason);
 
@@ -538,12 +657,25 @@ export function validateBackup(input: unknown): BackupValidation {
   const sets = normalizeList(data, 'sets', normalizeSet);
   if (!sets.ok) return fail(sets.reason);
 
+  // v1 的老文件里没有这两个数组。**缺失按空数组处理**，其余情况照常严格校验。
+  const templates = normalizeOptionalList(data, 'templates', normalizeSplitTemplate);
+  if (!templates.ok) return fail(templates.reason);
+
+  const templateExercises = normalizeOptionalList(
+    data,
+    'templateExercises',
+    normalizeTemplateExercise,
+  );
+  if (!templateExercises.ok) return fail(templateExercises.reason);
+
   // 8. 每个数组内部的 id 不能重复（重复 id 会撞主键，理由要给成人话）
   const lists: { label: string; items: { id: string }[] }[] = [
     { label: 'data.exercises', items: exercises.value },
     { label: 'data.sessions', items: sessions.value },
     { label: 'data.sessionExercises', items: sessionExercises.value },
     { label: 'data.sets', items: sets.value },
+    { label: 'data.templates', items: templates.value },
+    { label: 'data.templateExercises', items: templateExercises.value },
   ];
   for (const list of lists) {
     const duplicate = findDuplicateId(list.items, list.label);
@@ -581,6 +713,22 @@ export function validateBackup(input: unknown): BackupValidation {
     }
   }
 
+  const templateIds = new Set(templates.value.map((template) => template.id));
+  for (let i = 0; i < templateExercises.value.length; i += 1) {
+    const item = templateExercises.value[i];
+    const label = `data.templateExercises 第 ${i + 1} 条`;
+    if (!templateIds.has(item.templateId)) {
+      return fail(
+        `${label} 的 templateId ${JSON.stringify(item.templateId)} 在 data.templates 里找不到对应的计划（引用完整性）`,
+      );
+    }
+    if (!exerciseIds.has(item.exerciseId)) {
+      return fail(
+        `${label} 的 exerciseId ${JSON.stringify(item.exerciseId)} 在 data.exercises 里找不到对应的动作（引用完整性）`,
+      );
+    }
+  }
+
   // 10. 返回规范化过的对象，input 里多出来的字段一律不透传
   return {
     ok: true,
@@ -594,6 +742,8 @@ export function validateBackup(input: unknown): BackupValidation {
         sessions: sessions.value,
         sessionExercises: sessionExercises.value,
         sets: sets.value,
+        templates: templates.value,
+        templateExercises: templateExercises.value,
       },
     },
   };

@@ -17,6 +17,7 @@ import {
   listSessionSummaries,
 } from './sessionRepo';
 import { addSet, completeSet, endRest, listSets, startRest } from './setRepo';
+import { createTemplate, getTemplate, setTemplateExercises } from './templateRepo';
 import { exportAll, importAll } from './backupRepo';
 
 const MINUTE = 60_000;
@@ -73,6 +74,10 @@ function makeData(overrides: Partial<BackupData> = {}): BackupData {
         completedAt: T0 + MINUTE,
       },
     ],
+    // 格式 2 加的两张计划表。默认留空：本文件大部分用例测的是前四张表，
+    // 计划表的往返由下面「计划与 session 的 templateId 能原样导出再导入」单独覆盖。
+    templates: [],
+    templateExercises: [],
     ...overrides,
   };
 }
@@ -137,6 +142,8 @@ async function snapshot(exec: SqlExecutor) {
     sessions: await exec.all('SELECT * FROM session ORDER BY rowid'),
     sessionExercises: await exec.all('SELECT * FROM session_exercise ORDER BY rowid'),
     sets: await exec.all('SELECT * FROM set_entry ORDER BY rowid'),
+    templates: await exec.all('SELECT * FROM split_template ORDER BY rowid'),
+    templateExercises: await exec.all('SELECT * FROM template_exercise ORDER BY rowid'),
   };
 }
 
@@ -152,11 +159,13 @@ async function counts(exec: SqlExecutor) {
     sessions: await one('session'),
     sessionExercises: await one('session_exercise'),
     sets: await one('set_entry'),
+    templates: await one('split_template'),
+    templateExercises: await one('template_exercise'),
   };
 }
 
 describe('exportAll', () => {
-  it('空库：四个数组都是空的，format / version / schemaVersion / exportedAt 正确', async () => {
+  it('空库：六个数组都是空的，format / version / schemaVersion / exportedAt 正确', async () => {
     const exec = await createMigratedExecutor();
     const backup = await exportAll(exec);
 
@@ -168,6 +177,8 @@ describe('exportAll', () => {
     expect(backup.data.sessions).toEqual([]);
     expect(backup.data.sessionExercises).toEqual([]);
     expect(backup.data.sets).toEqual([]);
+    expect(backup.data.templates).toEqual([]);
+    expect(backup.data.templateExercises).toEqual([]);
   });
 
   it('有数据的库：四张表条数正确', async () => {
@@ -308,6 +319,8 @@ describe('importAll', () => {
       sessions: 2,
       sessionExercises: 3,
       sets: 3,
+      templates: 0,
+      templateExercises: 0,
     });
     expect(await exportAll(target)).toEqual(backup);
     expect(await snapshot(target)).toEqual(await snapshot(source));
@@ -381,7 +394,14 @@ describe('importAll', () => {
     await seedLibrary(exec);
 
     const empty = buildBackup(
-      { exercises: [], sessions: [], sessionExercises: [], sets: [] },
+      {
+        exercises: [],
+        sessions: [],
+        sessionExercises: [],
+        sets: [],
+        templates: [],
+        templateExercises: [],
+      },
       SCHEMA_VERSION,
       NOW,
     );
@@ -394,6 +414,8 @@ describe('importAll', () => {
       sessions: 0,
       sessionExercises: 0,
       sets: 0,
+      templates: 0,
+      templateExercises: 0,
     });
   });
 
@@ -470,5 +492,150 @@ describe('importAll', () => {
     const expected = ['后建', '中间', '先建'];
     expect((await listSessionSummaries(source, 10)).map((r) => r.name)).toEqual(expected);
     expect((await listSessionSummaries(target, 10)).map((r) => r.name)).toEqual(expected);
+  });
+
+  it('计划与 session 的 templateId 能原样导出再导入', async () => {
+    const exec = await createMigratedExecutor();
+    const exercise = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
+    const template = await createTemplate(exec, '腿日');
+    await setTemplateExercises(exec, template.id, [exercise.id]);
+    await createSession(exec, '腿部日', template.id);
+
+    const backup = await exportAll(exec);
+
+    expect(backup.data.templates.map((t) => t.name)).toEqual(['腿日']);
+    expect(backup.data.templateExercises).toHaveLength(1);
+    expect(backup.data.sessions[0].templateId).toBe(template.id);
+
+    // 换一个干净的库导入，两样都要一模一样地回来
+    const fresh = await createMigratedExecutor();
+    await importAll(fresh, backup);
+
+    const reloaded = await getTemplate(fresh, template.id);
+    expect(reloaded?.exercises.map((e) => e.exerciseName)).toEqual(['深蹲']);
+    const row = await fresh.first<{ template_id: string | null }>(
+      'SELECT template_id FROM session WHERE id = ?',
+      [backup.data.sessions[0].id],
+    );
+    expect(row?.template_id).toBe(template.id);
+  });
+
+  it('version 1 的老备份文件能整份导入，计划两张表为空', async () => {
+    // 端到端守住「老备份不作废」：从原始 JSON 形状开始，走一遍用户真实的两步
+    // （validateBackup → importAll），而不是直接喂一个已经规范化过的对象。
+    // 老文件里既没有 templates / templateExercises 数组，session 里也没有 templateId。
+    const legacyFile = {
+      format: BACKUP_FORMAT,
+      version: 1,
+      schemaVersion: SCHEMA_VERSION,
+      exportedAt: NOW,
+      data: {
+        exercises: [
+          {
+            id: 'ex-old',
+            name: '卧推',
+            muscleGroup: '胸',
+            equipment: '杠铃',
+            isCustom: true,
+            isArchived: false,
+            createdAt: T0,
+          },
+        ],
+        sessions: [
+          {
+            id: 'sess-old',
+            name: '推日',
+            startedAt: T0,
+            finishedAt: T0 + 45 * MINUTE,
+            note: null,
+          },
+        ],
+        sessionExercises: [
+          { id: 'se-old', sessionId: 'sess-old', exerciseId: 'ex-old', position: 0, note: null },
+        ],
+        sets: [
+          {
+            id: 'set-old',
+            sessionExerciseId: 'se-old',
+            position: 0,
+            weight: 60,
+            reps: 8,
+            isCompleted: true,
+            restSeconds: 120,
+            restStartedAt: null,
+            completedAt: T0 + MINUTE,
+          },
+        ],
+      },
+    };
+
+    const result = validateBackup(legacyFile);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const exec = await createMigratedExecutor();
+    await importAll(exec, result.backup);
+
+    expect(await counts(exec)).toEqual({
+      exercises: 1,
+      sessions: 1,
+      sessionExercises: 1,
+      sets: 1,
+      templates: 0,
+      templateExercises: 0,
+    });
+    const [summary] = await listSessionSummaries(exec, 10);
+    expect(summary.name).toBe('推日');
+    expect(summary.setCount).toBe(1);
+  });
+
+  it('没走校验的老备份直接喂进来也不炸：缺的两张表当空、templateId 当 NULL', async () => {
+    // 上面那条走的是「校验后的规范化对象」，缺的字段已经被补成 [] 和 null。
+    // 这条故意**绕过 validateBackup**，喂一份原样的老结构（session 里根本没有
+    // templateId 这个键，也就是 undefined）。node:sqlite 对 undefined 是直接抛错
+    // 而不是当 NULL，所以这里必须自己兜住 —— 「老备份一定能导入」不能只靠
+    // validateBackup 一侧守。
+    const exec = await createMigratedExecutor();
+    await importAll(
+      exec,
+      {
+        format: BACKUP_FORMAT,
+        version: 1,
+        schemaVersion: SCHEMA_VERSION,
+        exportedAt: NOW,
+        data: {
+          exercises: [
+            {
+              id: 'ex-old',
+              name: '卧推',
+              muscleGroup: '胸',
+              equipment: '杠铃',
+              isCustom: true,
+              isArchived: false,
+              createdAt: T0,
+            },
+          ],
+          sessions: [
+            {
+              id: 'sess-old',
+              name: '推日',
+              startedAt: T0,
+              finishedAt: T0 + 45 * MINUTE,
+              note: null,
+            },
+          ],
+          sessionExercises: [],
+          sets: [],
+        },
+      } as unknown as Parameters<typeof importAll>[1],
+    );
+
+    const row = await exec.first<{ template_id: string | null }>(
+      'SELECT template_id FROM session WHERE id = ?',
+      ['sess-old'],
+    );
+    expect(row?.template_id).toBeNull();
+    expect((await counts(exec)).templates).toBe(0);
+    expect((await counts(exec)).templateExercises).toBe(0);
   });
 });

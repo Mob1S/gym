@@ -71,6 +71,10 @@ function validData(): BackupData {
     sessions: [makeSession()],
     sessionExercises: [makeSessionExercise()],
     sets: [makeSet()],
+    // 格式 2 的两张计划表。这里刻意留空：本文件已有的一堆用例测的是前四张表，
+    // 计划表的内容由下面「备份格式 2」的用例单独覆盖。
+    templates: [],
+    templateExercises: [],
   };
 }
 
@@ -121,6 +125,8 @@ describe('buildBackup', () => {
     expect(backup.data.sessions).toEqual(data.sessions);
     expect(backup.data.sessionExercises).toEqual(data.sessionExercises);
     expect(backup.data.sets).toEqual(data.sets);
+    expect(backup.data.templates).toEqual(data.templates);
+    expect(backup.data.templateExercises).toEqual(data.templateExercises);
   });
 
   it('构造出来的文件一定通过校验（构造与校验不漂移）', () => {
@@ -215,14 +221,26 @@ describe('validateBackup：data 里的四个数组', () => {
     }
   });
 
-  it('合法的空备份（四个空数组）是合法的', () => {
+  it('合法的空备份（六个空数组）是合法的', () => {
     const backup = backupOf(
       validateBackup(
-        rawFile({}, { exercises: [], sessions: [], sessionExercises: [], sets: [] }),
+        rawFile(
+          {},
+          {
+            exercises: [],
+            sessions: [],
+            sessionExercises: [],
+            sets: [],
+            templates: [],
+            templateExercises: [],
+          },
+        ),
       ),
     );
     expect(backup.data.exercises).toEqual([]);
     expect(backup.data.sets).toEqual([]);
+    expect(backup.data.templates).toEqual([]);
+    expect(backup.data.templateExercises).toEqual([]);
   });
 });
 
@@ -484,6 +502,8 @@ describe('validateBackup：返回规范化对象', () => {
       'sessions',
       'sessionExercises',
       'sets',
+      'templates',
+      'templateExercises',
     ]);
     expect(Object.keys(backup.data.sets[0])).toEqual([
       'id',
@@ -537,5 +557,111 @@ describe('validateBackup：永不抛异常', () => {
       expect(result?.ok).toBe(false);
       expect(reasonOf(result as BackupValidation).length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('备份格式 2', () => {
+  it('BACKUP_VERSION 是 2', () => {
+    expect(BACKUP_VERSION).toBe(2);
+  });
+
+  it('version 1 的老备份仍然能导入，模板按空数组处理', () => {
+    // 这条是硬要求：用户手上已经导出的备份文件不能因为升级 App 就作废。
+    // 老文件里既没有 templates 数组，session 里也没有 templateId 字段。
+    const legacy = {
+      format: BACKUP_FORMAT,
+      version: 1,
+      schemaVersion: 2,
+      exportedAt: EXPORTED_AT,
+      data: {
+        exercises: [
+          {
+            id: 'ex-1',
+            name: '卧推',
+            muscleGroup: '胸',
+            equipment: '杠铃',
+            isCustom: true,
+            isArchived: false,
+            createdAt: EXPORTED_AT,
+          },
+        ],
+        sessions: [
+          {
+            id: 'sess-1',
+            name: '推日',
+            startedAt: EXPORTED_AT,
+            finishedAt: EXPORTED_AT + 1000,
+            note: null,
+          },
+        ],
+        sessionExercises: [
+          { id: 'se-1', sessionId: 'sess-1', exerciseId: 'ex-1', position: 0, note: null },
+        ],
+        sets: [
+          {
+            id: 'set-1',
+            sessionExerciseId: 'se-1',
+            position: 0,
+            weight: 60,
+            reps: 8,
+            isCompleted: true,
+            restSeconds: null,
+            restStartedAt: null,
+            completedAt: EXPORTED_AT + 1000,
+          },
+        ],
+      },
+    };
+
+    const result = validateBackup(legacy);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.backup.data.templates).toEqual([]);
+    expect(result.backup.data.templateExercises).toEqual([]);
+    expect(result.backup.data.sessions[0].templateId).toBeNull();
+  });
+
+  it('version 3（比当前新）仍然被拒绝', () => {
+    const result = validateBackup({
+      format: BACKUP_FORMAT,
+      version: 3,
+      schemaVersion: 3,
+      exportedAt: EXPORTED_AT,
+      data: {},
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it('引用了不存在的计划时被拒（引用完整性）', () => {
+    const result = validateBackup({
+      format: BACKUP_FORMAT,
+      version: 2,
+      schemaVersion: 3,
+      exportedAt: EXPORTED_AT,
+      data: {
+        exercises: [
+          {
+            id: 'ex-1',
+            name: '卧推',
+            muscleGroup: '胸',
+            equipment: '杠铃',
+            isCustom: true,
+            isArchived: false,
+            createdAt: EXPORTED_AT,
+          },
+        ],
+        sessions: [],
+        sessionExercises: [],
+        sets: [],
+        templates: [],
+        templateExercises: [
+          { id: 'te-1', templateId: 'missing', exerciseId: 'ex-1', position: 0 },
+        ],
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toContain('data.templateExercises 第 1 条');
   });
 });

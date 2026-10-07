@@ -11,16 +11,16 @@ import { newId } from '../lib/id';
  * 而且不会出现半应用状态。少一个接口就少一类不同步的 bug。
  */
 
-/** `split_template` 表的原始行 */
-interface TemplateRow {
+/** `split_template` 表的原始行。**导出给 `backupRepo` 复用** */
+export interface TemplateRow {
   id: string;
   name: string;
   position: number;
   created_at: number;
 }
 
-/** `template_exercise` 表的原始行 */
-interface TemplateExerciseRow {
+/** `template_exercise` 表的原始行。**导出给 `backupRepo` 复用** */
+export interface TemplateExerciseRow {
   id: string;
   template_id: string;
   exercise_id: string;
@@ -31,7 +31,7 @@ interface TemplateExerciseRow {
  * @param row `split_template` 表的行
  * @returns 领域层的 `SplitTemplate`（snake_case → camelCase）
  */
-function toTemplate(row: TemplateRow): SplitTemplate {
+export function toTemplate(row: TemplateRow): SplitTemplate {
   return {
     id: row.id,
     name: row.name,
@@ -44,7 +44,7 @@ function toTemplate(row: TemplateRow): SplitTemplate {
  * @param row `template_exercise` 表的行
  * @returns 领域层的 `TemplateExercise`
  */
-function toTemplateExercise(row: TemplateExerciseRow): TemplateExercise {
+export function toTemplateExercise(row: TemplateExerciseRow): TemplateExercise {
   return {
     id: row.id,
     templateId: row.template_id,
