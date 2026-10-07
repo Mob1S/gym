@@ -3181,11 +3181,15 @@ git commit -m "feat(domain): CSV 解析（Strong / Hevy / 训记三种列名 + �
 - Test: `src/repositories/importRepo.test.ts`
 
 **Interfaces:**
-- Consumes: Task 14 的 `ImportedWorkout`（**re-export，不搬家**）
+- Consumes: Task 14 的 `ImportedWorkout`（在 `csv.ts` 里定义，从 `importRecords.ts` **再导出**）
 - Produces:
   - `validateImportedWorkouts(workouts: ImportedWorkout[]): { ok: true } | { ok: false; reason: string }`（`domain/importRecords.ts`）
   - `normalizeExerciseName(name: string): string`（`domain/importRecords.ts`）
   - `importWorkouts(exec, workouts): Promise<ImportResult>`，`ImportResult = { sessions: number; exercises: number; createdExercises: number }`（`importRepo.ts`）
+
+> **`ImportedWorkout` 的归属，说清楚一次。** 它由 Task 14 定义在 `src/domain/csv.ts`（「解析出什么形状」由解析器决定），落库只是它的消费者。本 Task 的 `importRecords.ts` 把它 `export type { ImportedWorkout }` 再导出，作为**落库这一侧的规范入口**。
+>
+> 因此约定：**`importRecords.ts` 之外的任何文件都从 `importRecords` import 它，不从 `csv` import**。只有 `importRecords.ts` 自己从 `csv` import。`importRepo.ts`、`importRepo.test.ts`、界面（Task 16）一律如此 —— 同一个类型有两个 import 来源，是「该从哪拿」这种问题每次都要重新想一遍的开始。
 
 - [ ] **Step 1: 写 `importRecords` 的失败测试**
 
@@ -3193,7 +3197,8 @@ git commit -m "feat(domain): CSV 解析（Strong / Hevy / 训记三种列名 + �
 
 ```ts
 import { normalizeExerciseName, validateImportedWorkouts } from './importRecords';
-import type { ImportedWorkout } from './csv';
+// 走规范入口 importRecords（它再导出），不直接找 csv —— 见 Task 15 开头那条约定
+import type { ImportedWorkout } from './importRecords';
 
 function workout(overrides: Partial<ImportedWorkout> = {}): ImportedWorkout {
   return {
@@ -3349,7 +3354,10 @@ Expected: PASS，8 条。
 
 ```ts
 import { createMigratedExecutor } from '../db/__tests__/nodeExecutor';
-import type { ImportedWorkout } from '../domain/csv';
+// **从 importRecords import，不要从 csv import**：后者只是它的定义处，
+// 前者是规范入口（见 importRecords.ts 里的再导出说明）。两处都写会让同一个
+// 类型有两个来源，而「该从哪 import」这种问题每次都要重新想一遍。
+import type { ImportedWorkout } from '../domain/importRecords';
 import { listExercises } from './exerciseRepo';
 import { importWorkouts } from './importRepo';
 import { listCompletedSetPoints } from './progressRepo';
@@ -3511,7 +3519,10 @@ Expected: FAIL —— `Cannot find module './importRepo'`。
 
 ```ts
 import type { SqlExecutor } from '../db/types';
-import type { ImportedWorkout } from '../domain/csv';
+// **规范化入口是 importRecords，不是 csv**：`ImportedWorkout` 的定义在 csv.ts，
+// 但 importRecords 把它再导出成「落库这一侧的类型契约」。这里跟着契约走，
+// 将来类型换了住处（比如真的搬进 importRecords）时不必回头改这里。
+import type { ImportedWorkout } from '../domain/importRecords';
 import { validateImportedWorkouts, normalizeExerciseName } from '../domain/importRecords';
 import { newId } from '../lib/id';
 import { createCustomExercise, listExercises } from './exerciseRepo';
