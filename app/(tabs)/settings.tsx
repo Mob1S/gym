@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useRouter } from 'expo-router';
 
 import {
   CANCELED_MESSAGE,
@@ -27,10 +28,11 @@ const THEME_MODE_LABELS: { mode: ThemeMode; label: string }[] = [
 ];
 
 /**
- * 设置页：备份的导出 / 导入，外加一段组间休息的参考区间。
+ * 设置页：训练计划的入口，备份的导出 / 导入，外加一段组间休息的参考区间。
  *
  * 这一页做的每件事都动整库（导出读全库、导入换全库），所以两个按钮共用一个
- * `running` 互斥，任何一刻只允许跑一件。
+ * `running` 互斥，任何一刻只允许跑一件。「管理训练计划」只跳转，不写库，
+ * 不参与这个互斥。
  *
  * 休息参考区间只是一段静态文案：本 App 不做任何基于它的自动计算，
  * 训练后的比较只看用户自己的次数变化。
@@ -39,6 +41,7 @@ const THEME_MODE_LABELS: { mode: ThemeMode; label: string }[] = [
  */
 export default function SettingsTab() {
   const exec = useDatabase();
+  const router = useRouter();
   const [running, setRunning] = useState<RunningTask>(null);
 
   // 主题偏好：当前选中的模式 + 切换函数。读取与落盘都在 Provider 里
@@ -168,6 +171,19 @@ export default function SettingsTab() {
               );
             })}
           </View>
+        </Card>
+
+        <Card style={{ gap: space.sm }}>
+          <Text variant="title">训练计划</Text>
+          <Text variant="caption" color="textMuted">
+            编排你的分化循环（推日 / 拉日 / 腿日……），开始训练时会按顺序自动轮转。
+          </Text>
+          <Button
+            label="管理训练计划"
+            variant="secondary"
+            onPress={() => router.push('/plan')}
+            style={{ marginTop: space.sm }}
+          />
         </Card>
 
         <Card style={{ gap: space.sm }}>

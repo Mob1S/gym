@@ -34,6 +34,10 @@ export default function RootLayout() {
           <Stack.Screen name="history/[id]" options={{ title: '训练详情' }} />
           {/* 动作进步曲线：用原生导航栏，标题由页面自己设成动作名 */}
           <Stack.Screen name="exercise/[id]" options={{ title: '进步' }} />
+          {/* 计划列表与编辑：顶部只有标题（编辑页另加一个「保存」），
+              交给原生导航栏白拿返回手势与安全区处理 */}
+          <Stack.Screen name="plan/index" options={{ title: '训练计划' }} />
+          <Stack.Screen name="plan/[id]" options={{ title: '编辑计划' }} />
         </Stack>
       </ThemePreferenceProvider>
     </DatabaseProvider>
