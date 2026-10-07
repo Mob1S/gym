@@ -18,6 +18,23 @@ export function formatDate(timestamp: number): string {
   }`;
 }
 
+/**
+ * `2024年1月15日`。用于**确认框**这类需要一眼看清是哪一天的场合。
+ *
+ * 与 `formatDate`（`9月16日 周三`）的分工：那个用在中/英文混排的列表行里，
+ * 星期帮用户对上「我周三练的」这段记忆；而确认框里用户要确认的是「删的是不是
+ * 这一场」，星期既不提供信息、又把句子撑长。带年份是因为删除列表里可能有
+ * 去年的记录，那时候「9月16日」是歧义的。
+ */
+/**
+ * @param timestamp 毫秒时间戳
+ * @returns 形如 `2024年1月15日`（月和日**不补零**，与 `formatDate` 一致）
+ */
+export function formatDateFull(timestamp: number): string {
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
 /** `09:05` —— 必须补零，否则 9 点 5 分会写成 `9:5` */
 /**
  * @param timestamp 毫秒时间戳

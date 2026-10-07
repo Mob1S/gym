@@ -1,13 +1,23 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Pressable,
+  StyleSheet,
+  View,
+} from 'react-native';
 
+import { deleteSessionConfirmText } from '../../src/lib/deleteConfirm';
 import { formatDate } from '../../src/lib/format';
 import { useDatabase } from '../../src/repositories/database';
 import {
+  deleteSession,
   listSessionSummaries,
   type SessionSummary,
 } from '../../src/repositories/sessionRepo';
+import { useActiveSession } from '../../src/store/activeSession';
 import { Screen, Text, space, usePalette } from '../../src/ui';
 
 /** 列表一次取多少条：够翻一阵子，又不至于把几十场训练全塞进内存 */
@@ -96,6 +106,53 @@ export default function HistoryTab() {
     }
   }, [exec]);
 
+  /**
+   * 删一条训练记录。文案由 `deleteSessionConfirmText` 给出，**列表页与详情页
+   * 共用同一份** —— 「删除」两个字看不出会连带删掉组与曲线上的点。
+   *
+   * 只有「取消 / 删除」两个按钮：Android 上一个 Alert 最多三个，两个也已经
+   * 把选择说全了。
+   *
+   * @param item 要删的那一场摘要
+   * @returns 无返回值。Alert 是异步的，真正的删除在按钮回调里
+   */
+  const confirmDelete = useCallback(
+    (item: SessionSummary) => {
+      const { title, message } = deleteSessionConfirmText(
+        item.startedAt,
+        item.setCount,
+      );
+      Alert.alert(title, message, [
+        { text: '取消', style: 'cancel' },
+        {
+          text: '删除',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                await deleteSession(exec, item.id);
+                // 删的正好是进行中的那一场时，内存里那条也要清掉，否则首页
+                // 「继续训练」会指向一条已经不存在的记录，点进去是一屏空白。
+                // 清掉之后首页会自己去库里重新 resume —— `app/(tabs)/index.tsx`
+                // 里 `session` 变成 null 就会再触发一次。
+                if (useActiveSession.getState().session?.id === item.id) {
+                  useActiveSession.getState().reset();
+                }
+                await load();
+              } catch (e) {
+                Alert.alert(
+                  '没能删掉这条记录',
+                  e instanceof Error ? e.message : String(e),
+                );
+              }
+            })();
+          },
+        },
+      ]);
+    },
+    [exec, load],
+  );
+
   // 每次进入这个标签页都重新取数。练完保存回到「训练」标签后切过来，
   // 只有 useFocusEffect 能保证拿到刚写入的那条记录 —— useEffect 在
   // 标签页始终挂载的情况下不会再跑第二次。
@@ -114,7 +171,7 @@ export default function HistoryTab() {
    * 数字等宽才能竖着扫下来比较，这是列表页最实际的收益。
    *
    * @param item `listSessionSummaries` 返回的一行（已按时间倒序）
-   * @returns 可点击的一行；点进去是该场的详情页
+   * @returns 可点击的一行；点进去是该场的详情页，右侧的「删除」是另一个入口
    */
   const renderItem = useCallback(
     ({ item }: { item: SessionSummary }) => (
@@ -145,9 +202,29 @@ export default function HistoryTab() {
             </Text>
           </View>
         </View>
+
+        {/* 删除用行内常驻按钮，**不做左滑** —— 这是对 spec §6.4 里「列表左滑」
+            的刻意偏离：`src/components/DragNumber.tsx:64` 的注释写明「根布局
+            没有包 `GestureHandlerRootView`，直接用手势库会在真机上崩」。左滑
+            要么得引入那个全局包裹（会影响已按 PanResponder 调好的拖数字交互），
+            要么得为预览另写一套手势。一个常驻的小按钮代价只是不够时髦。
+
+            按钮嵌在整行那个 Pressable 里面：内层按下的那一刻就成了手势响应者，
+            点「删除」不会顺带把外层那一行的详情页也推进去。 */}
+        <Pressable
+          onPress={() => confirmDelete(item)}
+          accessibilityRole="button"
+          accessibilityLabel={`删除 ${item.name ?? '未命名训练'}`}
+          hitSlop={12}
+          style={styles.deleteButton}
+        >
+          <Text variant="caption" style={styles.deleteText}>
+            删除
+          </Text>
+        </Pressable>
       </Pressable>
     ),
-    [router, styles],
+    [confirmDelete, router, styles],
   );
 
   /**
@@ -254,6 +331,12 @@ function useHistoryStyles() {
       },
       // 容量是这一屏最该被比较的数字，所以它比旁边的时长/组数更大、更亮
       rowMeta: { color: palette.text },
+
+      // 行内的删除入口：常驻而不是左滑露出（理由见 renderItem 里的注释）。
+      // 撑出一点内边距当作点击热区，`hitSlop` 再往外扩 12 —— 这一下不可逆，
+      // 得让手指有地方落，但也不能大到吃掉整行的点击区
+      deleteButton: { paddingHorizontal: space.sm, paddingVertical: space.xs },
+      deleteText: { color: palette.danger, fontWeight: '600' as const },
 
       stateBox: {
         paddingVertical: space.huge,

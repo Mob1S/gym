@@ -108,6 +108,7 @@ export default function SessionScreen() {
     currentIndex,
     resume,
     addExercise,
+    removeExercise,
     setCurrentIndex,
     completeCurrentSet,
     beginNextSet,
@@ -481,6 +482,67 @@ export default function SessionScreen() {
   const lastSamePosition = lastPerformance[completedCount];
 
   /**
+   * 删掉当前正在记录的这个动作。
+   *
+   * 两条分支由「有没有已完成的组」决定，不是由用户选：
+   * - 一组都没完成（刚加错、想换一个）→ 直接删，不打扰；
+   * - 已经记过组 → 必须问一句，而且要说清**删几组**，因为「删除这个动作」
+   *   这五个字看不出会把已经练的组也带走。
+   *
+   * 三个按钮正好是 Android Alert 的上限（第四个会被静默丢掉）。
+   *
+   * @returns 无返回值。Alert 是异步的，真正的删除在按钮回调里
+   */
+  const handleRemoveExercise = () => {
+    if (!current) return;
+    const completed = current.sets.filter((s) => s.isCompleted).length;
+
+    if (completed === 0) {
+      void (async () => {
+        try {
+          await removeExercise(exec, current.sessionExercise.id, 'delete');
+        } catch (e) {
+          Alert.alert('没能删掉这个动作', e instanceof Error ? e.message : String(e));
+        }
+      })();
+      return;
+    }
+
+    Alert.alert(
+      `「${current.exerciseName}」已经记了 ${completed} 组`,
+      '把它从这次训练里去掉？',
+      [
+        {
+          text: `删掉这 ${completed} 组`,
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                await removeExercise(exec, current.sessionExercise.id, 'delete');
+              } catch (e) {
+                Alert.alert('没能删掉', e instanceof Error ? e.message : String(e));
+              }
+            })();
+          },
+        },
+        {
+          text: '先留着',
+          onPress: () => {
+            void (async () => {
+              try {
+                await removeExercise(exec, current.sessionExercise.id, 'keep');
+              } catch (e) {
+                Alert.alert('没能移出这个动作', e instanceof Error ? e.message : String(e));
+              }
+            })();
+          },
+        },
+        { text: '取消', style: 'cancel' },
+      ],
+    );
+  };
+
+  /**
    * 「完成这组」：把当前填的数值写库、标记完成、开始休息计时、预建下一组 ——
    * 四件事都在 store 的 `completeCurrentSet` 里一次做完（也就「完成即落盘」）。
    *
@@ -569,6 +631,25 @@ export default function SessionScreen() {
           <Pill label="＋" onPress={openPicker} accessibilityLabel="添加动作" />
         </ScrollView>
       </View>
+
+      {exercises.length > 1 ? (
+        <Pressable
+          onPress={handleRemoveExercise}
+          accessibilityRole="button"
+          accessibilityLabel={`删除动作：${current?.exerciseName ?? ''}`}
+          // 这一行视觉上只有一行小字（约 25dp 高），远低于 48dp 的可点建议值。
+          // 而它出现的场合恰恰是最不能要求精确点击的：健身房、单手、手上有汗。
+          // `hitSlop` 把热区撑到 48dp 而**不改变视觉** —— 这一行必须看起来不起眼
+          // （它和「结束训练」同属低频且误触代价高的一类，不该跟主按钮抢注意力），
+          // 但按起来不能费劲。这两个要求只能靠 hitSlop 同时满足。
+          hitSlop={{ top: 12, bottom: 12, left: 24, right: 24 }}
+          style={styles.removeRow}
+        >
+          <Text variant="caption" style={styles.removeText}>
+            删除「{current?.exerciseName}」
+          </Text>
+        </Pressable>
+      ) : null}
 
       <View style={styles.setRow}>
         <Text variant="numeric" style={styles.setNumber}>
@@ -661,6 +742,16 @@ function useSessionStyles() {
         gap: space.sm,
         alignItems: 'center' as const,
       },
+
+      // 「删除这个动作」：低频、代价高，所以做成一行小字而不是按钮。
+      // 它和下面的「结束训练」一样属于「别乱点」的那一类，不跟主按钮抢注意力。
+      //
+      // `paddingVertical: space.md`（12dp）不是随手写的：13px 的字 + 上下各 12dp
+      // ≈ 44dp，正好够到可点热区的下限。只有 4dp 的话整行才 25dp 高，而这一屏是
+      // 单手、手上有汗的时候用的 —— 那里点不中等于这个功能不存在。
+      // 视觉上仍然是一行不起眼的小字，靠的是字号和颜色，不是靠把热区做小。
+      removeRow: { alignSelf: 'center' as const, paddingVertical: space.md },
+      removeText: { color: palette.danger, textDecorationLine: 'underline' as const },
 
       // 组数：整屏第二重要的信息，只排在数值后面
       setRow: {
