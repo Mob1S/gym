@@ -209,10 +209,20 @@ export interface CsvParseResult {
   skipped: { line: number; reason: string }[];
   /** 识别到的来源与列映射，预览里写出来让用户确认 */
   detected: { source: string; columns: Record<string, string> };
+  /**
+   * 有多少行的重量原本是磅、已被换算成公斤，用于预览里的「12 行已换算」。
+   * **必须由解析器算出来**：换算之后公斤与磅在 `workouts` 里完全相同，
+   * 事后从 weight 反推是不可能的。没有磅时是 0，不是 undefined。
+   */
+  poundsConverted: number;
 }
 
 export function parseWorkoutCsv(text: string): CsvParseResult;
 ```
+
+> 实施后补记：`poundsConverted` 是设计时漏掉的字段。预览页那句「已把 N 行磅换算成公斤」
+> 是这一节明确要求的，但最初的接口里没有任何字段能承载这个计数，等于把这件事
+> 推给界面自己扫文本去数（判据会和解析器不一致）。已补进接口并由解析器负责。
 
 **列名映射表**（表头先按规范化后的名字匹配，三种来源各一张）：
 

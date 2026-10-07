@@ -18,8 +18,12 @@
 - **时间一律存毫秒时间戳**（INTEGER）；**布尔一律存 0/1**。
 - **`ORDER BY` 里凡是有 `started_at` 的地方都必须跟 `rowid DESC`**（或对应的列）：毫秒精度会并列，只用时间排序时 SQLite 退化为扫描顺序，语义就反了。
 - **测试放同目录的 `*.test.ts`**（不是 `__tests__/`），用 `createNodeExecutor()` / `createMigratedExecutor()`（`src/db/__tests__/nodeExecutor.ts`）建库。
-- 每条命令都用 `npx`。**全量测试用 `npx jest`**（配置里 `--runInBand` 由 `npm test` 加，直接跑 jest 也行）。
-- **每个 Task 结束必须同时满足：`npx jest` 全绿 + `npx tsc --noEmit` 干净**，然后才提交。
+- 每条命令都用 `npx`。
+- **跑 jest 必须加 `--maxWorkers=1`**：本机沙箱禁止子进程管道 stdio，jest 默认的 worker 池会 `spawn EPERM` 直接崩。`--maxWorkers=1` 让测试在主进程内跑，测试集合与断言完全不变。所以命令是 `npx jest --maxWorkers=1`（单个文件时同样加：`npx jest --maxWorkers=1 src/domain/csv.test.ts`）。
+- **测试文件基线是 20 个、断言 245 条**（M6 之前）。任何时刻的「全绿」都要以这个数字为参照来判断有没有人漏跑了文件 —— 别用行数之类的间接统计去数，会数错。
+- **每个 Task 结束必须同时满足：`npx jest --maxWorkers=1` 全绿 + `npx tsc --noEmit` 干净**，然后才提交。
+- **不要自己跑 `git commit`**：本机 `.git` 目录不可写，会报 `Permission denied`。改完代码、跑绿测试即可，提交由编排者统一处理。
+- 沙箱下 `src/**` 子目录的写入可能被拒（`Access denied`），改文件请用编辑工具而不是命令行重定向。
 
 ## 执行顺序不可颠倒
 
@@ -1175,6 +1179,8 @@ export interface BackupData {
 （import 加上 `SplitTemplate, TemplateExercise`。）
 
 3. `normalizeSession` 里加 `templateId`，**用宽容读法**（老文件里没有这个字段）：
+
+> ⚠️ **Task 1 已经在这里写死了一行 `templateId: null`**（当时是为了让 tsc 通过，备份格式还没升级）。所以这一步**不是「加上字段」，而是「把那个写死的 null 改成真的去读」** —— 直接照抄下面这段替换掉 `note: note.value,` 之后的那一行 `templateId: null,`。只加读法、忘了删那行写死的，会出现重复键（后者覆盖前者，备份里存过的 templateId 永远读不回来，而且不报错）。
 
 ```ts
   // 老备份（version 1）里没有 templateId 字段，缺失按 null 处理。
@@ -2788,7 +2794,9 @@ git commit -m "refactor(ui): 动作选择弹层抽成共用组件"
 > **顺序问题**：`ImportedWorkout` 是 CSV 解析的产物，也是落库的输入，两个 Task 都要它。放在 `domain/importRecords.ts`（Task 15）更合理，但那样 Task 14 就没法独立编译。**做法**：Task 14 在 `csv.ts` 里定义并 **export** 它；Task 15 新建 `importRecords.ts` 时**从这里 import 再 re-export**，不搬家。最终它住在 `csv.ts` 里，因为「解析出什么形状」由解析器决定，落库只是它的消费者。
 
 - Produces:
-  - `ImportedWorkout`、`CsvParseResult`、`parseWorkoutCsv(text: string): CsvParseResult`
+  - `ImportedWorkout`、`CsvParseResult`、`CsvSource`、`parseWorkoutCsv(text: string): CsvParseResult`
+
+> **`CsvParseResult` 有四个字段，第四个是 `poundsConverted: number`**（有多少行的重量原本是磅、已被换算成公斤）。它必须由解析器算出来：换算之后公斤和磅在 `workouts` 里完全相同，事后无法反推。预览页要靠它写「已把 N 行磅换算成公斤」——135 磅当成 135 kg 会直接毁掉进步曲线，这件事必须让用户看见。**没有磅时是 `0`，不是 `undefined`。**
 
 - [ ] **Step 1: 写失败的测试**
 
@@ -3111,8 +3119,8 @@ const SOURCES = [
 
 - [ ] **Step 4: 跑测试，确认绿了**
 
-Run: `npx jest src/domain/csv.test.ts`
-Expected: PASS，17 条。
+Run: `npx jest --maxWorkers=1 src/domain/csv.test.ts`
+Expected: PASS，19 条。
 
 > 如果某条测试的实现里发现了更简单的做法（比如 `parseDate` 能用别的方式覆盖全部格式），**以测试为准改写实现，不要改测试的期望** —— 这些期望就是设计文档 §5.2 那张表。
 
@@ -3673,6 +3681,7 @@ export async function pickTextFile(): Promise<string | null>;
 - **`workouts.length === 0` 时不给「确认导入」按钮**，只显示「这个文件里没有能识别的训练记录」+ 一句「请确认选的是从其他 App 导出的训练记录 CSV」+「重新选择」/「取消」。这正是「用户选错文件」的兜底。
 - 「将新建为自定义动作」的名单要列出来：拿 `workouts` 里所有动作名去 `listExercises` 的结果里做**同样的归一化匹配**（复用 Task 15 的 `normalizeExerciseName`，不要自己再写一遍比较逻辑），差集就是新动作的名字。去重后按名字排序显示，超过 5 个就显示前 5 个 + 「等 N 个」。
 - 「读不懂」那一行做成可展开（`useState` 控制），展开后逐行列出「第 37 行：日期的格式认不出来」。**`skipped` 为空时这一行整个不渲染**（写「0 行会被跳过」是噪音）。
+- **「单位换算」那一行用 `poundsConverted`**（Task 14 已经实现）：`poundsConverted > 0` 时渲染 `已把 N 行磅换算成公斤`，等于 0 时**整行不渲染**。不要自己扫 CSV 文本去数 `lb` —— 那会把进 skipped 的行也算进去，而且判据和解析器不一致（解析器认 `lbs`/`pound`/`磅` 等多种写法）。
 - 「确认导入」的按钮用 `loading` + `disabled`（`importWorkouts` 要写几百行，重复点击会跑第二遍）。成功后的 Alert 写清三个数：`导入 42 场训练、18 个动作（其中 3 个是新建的）`，然后 `router.back()`。
 - 失败时把 `importWorkouts` 抛出的原始信息原样弹出来，并**留在预览屏**（用户还可以重选文件）——事务已回滚，库里没变。
 
@@ -3800,15 +3809,27 @@ Expected: 全绿、干净。
 
 如果你有 `expo start --web` 的环境，起一次确认页面能加载、四个标签都能切（这一步只是防「新加的文件在 web 打包路径上不兼容」，比如误 import 了 `expo-sqlite`）。
 
-- [ ] **Step 4: 在 spec 里记下落实结果**
+- [ ] **Step 4: 更新 README（它已经有两处是错的了）**
+
+`README.md` 里有两处会被这次改动变成**错的描述**，必须在收尾时改掉——文档与实现不一致是那种「下一个人照着文档写出 bug」的起点：
+
+1. 第 7 行「**开始训练**：一键开始新训练，自动沿用上一次的动作组合。」→ 改成分化循环的说法：
+   `- **训练计划**：自定义几套分化（推日 / 拉日 / 腿日……），开始训练时按顺序自动轮转；没建计划时沿用上一次的动作组合。`
+2. 「功能」列表补三条：训练中可删动作、历史里可删记录、从其他 App 导入记录 + 手动补记录。
+3. 「数据模型」那一节只有四张表，补上 `split_template`（分化计划）与 `template_exercise`（计划里的动作），并说明 `session.template_id` 的用途。
+4. 「设计原则」补两条这次新立的：
+   - **轮转指针不单独存**：从 `session.template_id` 推导，避免四处同步。
+   - **导入只有一条落库路径**：CSV 与手填产出同一种中间结构，共用 `importRepo`。
+
+- [ ] **Step 5: 在 spec 里记下落实结果**
 
 在 `docs/superpowers/specs/2026-10-07-plans-and-record-management-design.md` 的 §9 末尾追加一段「落实记录」，用一句话说清实际做法与哪些验收项在真机上过了、哪些没过。**没做的验收项要写清「没做」**，不要写成「已通过」。
 
-- [ ] **Step 5: 提交**
+- [ ] **Step 6: 提交**
 
 ```bash
-git add src/db/demoExecutor.ts src/lib/preview.ts "app/(tabs)/settings.tsx" "app/(tabs)/history.tsx" "app/history/[id].tsx" "app/(tabs)/index.tsx" docs/superpowers/specs/2026-10-07-plans-and-record-management-design.md
-git commit -m "chore(preview): 网页预览里隐藏不可用的入口，并记录落实结果"
+git add src/db/demoExecutor.ts src/lib/preview.ts "app/(tabs)/settings.tsx" "app/(tabs)/history.tsx" "app/history/[id].tsx" "app/(tabs)/index.tsx" docs/superpowers/specs/2026-10-07-plans-and-record-management-design.md README.md
+git commit -m "chore(preview): 网页预览里隐藏不可用的入口，更新 README 与落实记录"
 ```
 
 ---

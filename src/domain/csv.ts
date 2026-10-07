@@ -20,6 +20,15 @@ export interface CsvParseResult {
   skipped: { line: number; reason: string }[];
   /** 识别到的来源与用到的列名，预览页要写出来让用户确认 */
   detected: { source: CsvSource; columns: Record<string, string> };
+  /**
+   * 有多少行的重量原本是磅、被换算成了公斤。
+   *
+   * 必须由解析器**算出来**：换算之后公斤和磅在 `workouts` 里长得一模一样，
+   * 事后从 weight 反推是不可能的。预览页要靠它写明「已把 N 行磅换算成公斤」——
+   * 少数几磅的误差用户未必看得出，但 135 磅当成 135 kg 会直接毁掉进步曲线，
+   * 所以这件事必须让用户看见。**没有磅时是 0，不是 undefined**。
+   */
+  poundsConverted: number;
 }
 
 /** 识别到的来源；`unknown` 表示列名谁都不像（多半是选错了文件） */
@@ -374,6 +383,14 @@ function localDateKey(timestamp: number): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * 重量解析的结果。
+ *
+ * 多带回一个「原本是不是磅」不是为了好看：换算之后两者在结果里完全相同，
+ * 而预览页要告诉用户「有 N 行是磅」。这个信息只有解析这一层有。
+ */
+type WeightResult = { kg: number; fromPounds: boolean } | null;
+
+/**
  * 重量 → 公斤。`null` 表示读不懂（进 skipped），`0` 表示自重（是有效数据）。
  *
  * - 空 / `BW` / `自重` → 0：引体向上、俯卧撑这些动作在 CSV 里重量列就是空的，
@@ -382,11 +399,13 @@ function localDateKey(timestamp: number): string {
  *   磅绝不能静默当成公斤：135 磅读成 135 kg 会让进步曲线直接跳到一个不可能的数字
  * - 认不出的单位（如「斤」）返回 null，不做二次猜测
  */
-function parseWeight(raw: string): number | null {
+function parseWeight(raw: string): WeightResult {
   const text = toHalfWidth(raw).trim().toLowerCase();
 
-  if (text === '') return 0;
-  if (text === 'bw' || text === 'bw.' || text === '自重' || text === '自身重量' || text === '身体重量') return 0;
+  if (text === '') return { kg: 0, fromPounds: false };
+  if (text === 'bw' || text === 'bw.' || text === '自重' || text === '自身重量' || text === '身体重量') {
+    return { kg: 0, fromPounds: false };
+  }
 
   const matched = /^([+-]?\d+(?:\.\d+)?)\s*([a-z\u4e00-\u9fff]*)$/.exec(text);
   if (!matched) return null;
@@ -395,9 +414,11 @@ function parseWeight(raw: string): number | null {
   if (!Number.isFinite(value)) return null;
 
   const unit = matched[2];
-  if (unit === '' || unit === 'kg' || unit === 'kgs' || unit === '公斤' || unit === '千克') return value;
+  if (unit === '' || unit === 'kg' || unit === 'kgs' || unit === '公斤' || unit === '千克') {
+    return { kg: value, fromPounds: false };
+  }
   if (unit === 'lb' || unit === 'lbs' || unit === 'pound' || unit === 'pounds' || unit === '磅') {
-    return Math.round(value * POUND_IN_KG * 100) / 100;
+    return { kg: Math.round(value * POUND_IN_KG * 100) / 100, fromPounds: true };
   }
 
   return null;
@@ -427,6 +448,8 @@ interface ParsedRow {
   exercise: string;
   weight: number;
   reps: number;
+  /** 这一行的重量原本是磅（已换算）。汇总成预览页那句「已把 N 行磅换算成公斤」 */
+  fromPounds: boolean;
 }
 
 type RowResult = { ok: true; row: ParsedRow } | { ok: false; reason: string };
@@ -450,7 +473,6 @@ function parseRow(fields: string[], index: Record<ColumnKey, number>): RowResult
   if (rawWeight === undefined) return { ok: false, reason: '这一行的列数比表头少，读不到「重量」列' };
   const weight = parseWeight(rawWeight);
   if (weight === null) return { ok: false, reason: `重量的格式认不出来（收到 \`${rawWeight.trim()}\`）` };
-
   const rawReps = valueAt(fields, index.reps);
   if (rawReps === undefined) return { ok: false, reason: '这一行的列数比表头少，读不到「次数」列' };
   const reps = parseReps(rawReps);
@@ -460,7 +482,17 @@ function parseRow(fields: string[], index: Record<ColumnKey, number>): RowResult
   const rawName = index.name >= 0 ? valueAt(fields, index.name) : undefined;
   const name = rawName === undefined ? null : rawName.trim() === '' ? null : rawName.trim();
 
-  return { ok: true, row: { startedAt, name, exercise, weight, reps } };
+  return {
+    ok: true,
+    row: {
+      startedAt,
+      name,
+      exercise,
+      weight: weight.kg,
+      reps,
+      fromPounds: weight.fromPounds,
+    },
+  };
 }
 
 interface WorkoutGroup {
@@ -523,13 +555,15 @@ export function parseWorkoutCsv(text: string): CsvParseResult {
 
   // 表头 = 第一条不是空白的记录：文件前面有几行空行时不至于把空行当表头
   const headerRecord = records.find((record) => !isBlankRecord(record.fields));
-  if (!headerRecord) return { workouts: [], skipped: [], detected: { source: 'unknown', columns: {} } };
+  if (!headerRecord) {
+    return { workouts: [], skipped: [], detected: { source: 'unknown', columns: {} }, poundsConverted: 0 };
+  }
 
   const match = locateColumns(headerRecord.fields);
   if (match.source === 'unknown') {
     // 选错文件时不把每行都塞进 skipped：几十条「读不懂」会让用户以为文件坏了，
     // 其实是拿错了文件；界面只看 detected.source。
-    return { workouts: [], skipped: [], detected: { source: 'unknown', columns: {} } };
+    return { workouts: [], skipped: [], detected: { source: 'unknown', columns: {} }, poundsConverted: 0 };
   }
 
   const rows: ParsedRow[] = [];
@@ -549,5 +583,7 @@ export function parseWorkoutCsv(text: string): CsvParseResult {
     workouts: buildWorkouts(rows),
     skipped,
     detected: { source: match.source, columns: match.columns },
+    // 只数成功的行：进 skipped 的那些没有进库，把它们算进换算提示只会让人困惑
+    poundsConverted: rows.filter((row) => row.fromPounds).length,
   };
 }

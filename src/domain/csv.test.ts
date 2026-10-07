@@ -117,6 +117,30 @@ describe('CSV 解析：脏数据', () => {
     expect(result.workouts[0].exercises[1].sets[0].weight).toBe(0);
   });
 
+  it('数出有几行是磅，供预览页写明换算过', () => {
+    // 必须**算出来**而不是从 weight 反推：公斤与磅在解析结果里长得一模一样
+    // （都已经是 kg 了），只有解析这一层知道哪几行原本是磅。
+    const result = parseWorkoutCsv(
+      csv([
+        'Date,Exercise Name,Weight,Reps',
+        '2024-01-15 09:30:00,卧推,135 lb,8',
+        '2024-01-15 09:35:00,深蹲,100,5',
+        '2024-01-15 09:40:00,划船,80 lbs,10',
+        '2024-01-15 09:45:00,引体向上,BW,8',
+      ]),
+    );
+
+    expect(result.poundsConverted).toBe(2);
+  });
+
+  it('没有磅的时候计数是 0（不是 undefined）', () => {
+    // 预览页要按这个数决定渲不渲染那一行说明，undefined 会让它渲染出「已把 undefined 行…」
+    const result = parseWorkoutCsv(
+      csv(['Date,Exercise Name,Weight,Reps', '2024-01-15 09:30:00,卧推,60,8']),
+    );
+    expect(result.poundsConverted).toBe(0);
+  });
+
   it('只有日期没有时间时按当天 12:00 本地时间', () => {
     const result = parseWorkoutCsv(
       csv(['Date,Exercise Name,Weight,Reps', '2024-01-15,卧推,60,8']),
