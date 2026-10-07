@@ -267,7 +267,7 @@ export const useActiveSession = create<ActiveSessionState>((set, get) => ({
     // 记录页会因为 store 里没有 exercises 而误判成「这次训练还没有动作」。
     if (await get().resume(exec)) return 'conflict';
 
-    const session = await createSession(exec, name);
+    const session = await createSession(exec, name, null);
 
     // 沿用上一次训练的动作组合，而不是每次都替用户挑一个动作。
     //

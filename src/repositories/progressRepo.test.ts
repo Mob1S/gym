@@ -31,7 +31,7 @@ describe('progressRepo', () => {
     const exec = await createMigratedExecutor();
     const squat = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
 
-    const later = await createSession(exec, '后一场');
+    const later = await createSession(exec, '后一场', null);
     await exec.run('UPDATE session SET started_at = ? WHERE id = ?', [
       2_000,
       later.id,
@@ -39,7 +39,7 @@ describe('progressRepo', () => {
     await record(exec, later.id, squat.id, 60, 8, 2_100);
     await finishSession(exec, later.id, 2_200);
 
-    const earlier = await createSession(exec, '前一场');
+    const earlier = await createSession(exec, '前一场', null);
     await exec.run('UPDATE session SET started_at = ? WHERE id = ?', [
       1_000,
       earlier.id,
@@ -62,7 +62,7 @@ describe('progressRepo', () => {
   it('没完成的那一组不算 —— 它是记录界面预建的占位', async () => {
     const exec = await createMigratedExecutor();
     const squat = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
-    const session = await createSession(exec, '一场');
+    const session = await createSession(exec, '一场', null);
     const se = await addExerciseToSession(exec, session.id, squat.id);
     await addSet(exec, se.id, 100, 5); // 建出来但没完成
     const done = await addSet(exec, se.id, 100, 5);
@@ -75,7 +75,7 @@ describe('progressRepo', () => {
   it('进行中的训练整场不算', async () => {
     const exec = await createMigratedExecutor();
     const squat = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
-    const running = await createSession(exec, '还没结束');
+    const running = await createSession(exec, '还没结束', null);
     await record(exec, running.id, squat.id, 100, 5, 1_000);
     // 故意不调 finishSession
 
@@ -86,7 +86,7 @@ describe('progressRepo', () => {
     const exec = await createMigratedExecutor();
     const squat = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
     const bench = await createCustomExercise(exec, '卧推', '胸', '杠铃');
-    const session = await createSession(exec, '一场');
+    const session = await createSession(exec, '一场', null);
     await record(exec, session.id, squat.id, 100, 5, 1_000);
     await record(exec, session.id, bench.id, 60, 8, 1_100);
     await finishSession(exec, session.id, 2_000);
@@ -100,7 +100,7 @@ describe('progressRepo', () => {
     const exec = await createMigratedExecutor();
     const squat = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
     const bench = await createCustomExercise(exec, '卧推', '胸', '杠铃');
-    const session = await createSession(exec, '一场');
+    const session = await createSession(exec, '一场', null);
     await record(exec, session.id, squat.id, 100, 5, 1_000);
     await record(exec, session.id, bench.id, 60, 8, 1_100);
     await finishSession(exec, session.id, 2_000);
@@ -117,7 +117,7 @@ describe('progressRepo', () => {
     const bench = await createCustomExercise(exec, '卧推', '胸', '杠铃');
     await createCustomExercise(exec, '从没练过的动作', '背', '杠铃');
 
-    const first = await createSession(exec, '第一场');
+    const first = await createSession(exec, '第一场', null);
     await exec.run('UPDATE session SET started_at = ? WHERE id = ?', [
       1_000,
       first.id,
@@ -125,7 +125,7 @@ describe('progressRepo', () => {
     await record(exec, first.id, squat.id, 100, 5, 1_100);
     await finishSession(exec, first.id, 1_200);
 
-    const second = await createSession(exec, '第二场');
+    const second = await createSession(exec, '第二场', null);
     await exec.run('UPDATE session SET started_at = ? WHERE id = ?', [
       3_000,
       second.id,

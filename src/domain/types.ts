@@ -25,6 +25,16 @@ export interface WorkoutSession {
   /** 结束时间；null 表示这场还没结束 */
   finishedAt: number | null;
   note: string | null;
+  /**
+   * 这一场是按哪套计划练的；null = 没按计划（第一次用 App、计划被删过、
+   * 或者从别处导入/手填的记录）。
+   *
+   * 「今天该练哪一套」就是从这个字段推出来的：取最近一场已结束、且它非空的训练，
+   * 在计划列表里往后数一套。**刻意不另存一个「下一个该练第几套」的字段** ——
+   * 那就要在跳过、删计划、导入记录、恢复备份四条路径上同步维护它，一旦不符
+   * 表现是「轮转莫名跳了一套」。
+   */
+  templateId: string | null;
 }
 
 /** 一次训练里的一个动作（练了什么 + 排第几）。**组挂在它下面**，不是挂在动作上 */
@@ -74,4 +84,22 @@ export interface SetLike {
   reps: number;
   /** 未完成的组不计入容量负荷 */
   isCompleted: boolean;
+}
+
+/** 一套分化计划（训练模板）。名字与套数全由用户定：推/拉/腿、A/B、上肢/下肢都行 */
+export interface SplitTemplate {
+  id: string;
+  name: string;
+  /** 轮转顺序，从 0 开始；界面上的先后就是它 */
+  position: number;
+  createdAt: number;
+}
+
+/** 计划里的一个动作。**计划不含目标重量/次数**，见 `schema.ts` 的说明 */
+export interface TemplateExercise {
+  id: string;
+  templateId: string;
+  exerciseId: string;
+  /** 在计划里的顺序，从 0 开始 */
+  position: number;
 }

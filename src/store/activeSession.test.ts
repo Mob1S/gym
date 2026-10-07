@@ -28,7 +28,7 @@ const MINUTE = 60 * 1000;
  */
 async function setupWithRestingSet(restAgeMs: number) {
   const exec = await createMigratedExecutor();
-  const session = await createSession(exec, '腿部日');
+  const session = await createSession(exec, '腿部日', null);
   const exercise = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
   const se = await addExerciseToSession(exec, session.id, exercise.id);
   const set = await addSet(exec, se.id, 100, 5);
@@ -47,7 +47,7 @@ async function setupFinishedSession(
   exec: SqlExecutor,
   names: string[],
 ): Promise<{ exerciseIds: string[] }> {
-  const session = await createSession(exec, '上一次训练');
+  const session = await createSession(exec, '上一次训练', null);
   const exerciseIds: string[] = [];
   for (const name of names) {
     const exercise = await createCustomExercise(exec, name, '胸', '杠铃');
@@ -182,7 +182,7 @@ describe('开始新训练时沿用上一次的动作组合', () => {
     // 同上：预置库也灌上，这条才同时挡住「从进行中的训练复制」和
     // 「随便挑一个动作塞进去」两种旧行为。
     await seedExercisesIfEmpty(exec);
-    const running = await createSession(exec, '没结束的训练');
+    const running = await createSession(exec, '没结束的训练', null);
     const exercise = await createCustomExercise(exec, '硬拉', '背', '杠铃');
     await addExerciseToSession(exec, running.id, exercise.id);
 
@@ -236,7 +236,7 @@ describe('进行中的训练最多一条', () => {
 
   it('库里有一场进行中的训练时，startNew 返回 conflict 且不新建', async () => {
     const exec = await createMigratedExecutor();
-    const running = await createSession(exec, '没结束的训练');
+    const running = await createSession(exec, '没结束的训练', null);
 
     expect(await useActiveSession.getState().startNew(exec, null)).toBe('conflict');
     expect(await countAllSessions(exec)).toBe(1);

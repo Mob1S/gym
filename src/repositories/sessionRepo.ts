@@ -14,6 +14,7 @@ export interface SessionRow {
   started_at: number;
   finished_at: number | null;
   note: string | null;
+  template_id: string | null;
 }
 
 /** `session_exercise` 表的原始行 */
@@ -36,6 +37,7 @@ export function toSession(row: SessionRow): WorkoutSession {
     startedAt: row.started_at,
     finishedAt: row.finished_at,
     note: row.note,
+    templateId: row.template_id,
   };
 }
 
@@ -54,7 +56,7 @@ export function toSessionExercise(row: SessionExerciseRow): SessionExercise {
 }
 
 /** 本文件内的查询与 `backupRepo` 共用，保证 SELECT 的列与映射永远对得上 */
-export const SESSION_COLUMNS = 'id, name, started_at, finished_at, note';
+export const SESSION_COLUMNS = 'id, name, started_at, finished_at, note, template_id';
 
 export const SESSION_EXERCISE_COLUMNS =
   'id, session_id, exercise_id, position, note';
@@ -68,11 +70,13 @@ export const SESSION_EXERCISE_COLUMNS =
  *
  * @param exec SQL 执行器
  * @param name 训练名，可为 null（界面不强制命名）
+ * @param templateId 这场按哪套计划练；null = 不按计划（见 `WorkoutSession.templateId`）
  * @returns 新建的实体，含已生成的 id 与 `startedAt`（取当前时间）
  */
 export async function createSession(
   exec: SqlExecutor,
   name: string | null,
+  templateId: string | null,
 ): Promise<WorkoutSession> {
   const session: WorkoutSession = {
     id: newId(),
@@ -80,10 +84,11 @@ export async function createSession(
     startedAt: Date.now(),
     finishedAt: null,
     note: null,
+    templateId,
   };
   await exec.run(
-    'INSERT INTO session (id, name, started_at, finished_at, note) VALUES (?, ?, ?, NULL, NULL)',
-    [session.id, session.name, session.startedAt],
+    'INSERT INTO session (id, name, started_at, finished_at, note, template_id) VALUES (?, ?, ?, NULL, NULL, ?)',
+    [session.id, session.name, session.startedAt, session.templateId],
   );
   return session;
 }

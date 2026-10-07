@@ -1,5 +1,5 @@
 import type { SqlExecutor } from './types';
-import { CREATE_META_SQL, CREATE_SETTINGS_SQL, CREATE_TABLES_SQL } from './schema';
+import { ADD_SESSION_TEMPLATE_SQL, CREATE_META_SQL, CREATE_SETTINGS_SQL, CREATE_TABLES_SQL, CREATE_TEMPLATE_SQL } from './schema';
 
 /**
  * 一个版本化迁移项。
@@ -31,6 +31,17 @@ export const MIGRATIONS: Migration[] = [
     // 这张表（它们的 `schema_version` 已经是 1，不会再跑 v1）。
     version: 2,
     statements: [CREATE_SETTINGS_SQL],
+  },
+  {
+    // v3：分化计划（训练模板）+「这场训练属于哪套计划」。
+    //
+    // 不能并进 v1/v2：那两项早就发布过，库里的 schema_version 已经是 2 的库
+    // 不会再跑它们（migrate 只跑 version > current 的项），新列会永远加不上。
+    //
+    // ALTER TABLE 这一句**不能带参数**调用：`SqlExecutor` 的约定是无参数时才跑
+    // 多语句，而 node:sqlite 的 prepare() 只编译第一条、后面静默丢弃。
+    version: 3,
+    statements: [CREATE_TEMPLATE_SQL, ADD_SESSION_TEMPLATE_SQL],
   },
 ];
 

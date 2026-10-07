@@ -12,7 +12,7 @@ import {
 
 async function setup() {
   const exec = await createMigratedExecutor();
-  const session = await createSession(exec, '腿部日');
+  const session = await createSession(exec, '腿部日', null);
   const exercise = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
   const se = await addExerciseToSession(exec, session.id, exercise.id);
   return { exec, session, exercise, se };
@@ -85,7 +85,7 @@ describe('setRepo', () => {
     const { exec, exercise } = await setup();
 
     // 更早的一次训练
-    const oldSession = await createSession(exec, '上一次');
+    const oldSession = await createSession(exec, '上一次', null);
     const oldSe = await addExerciseToSession(exec, oldSession.id, exercise.id);
     const oldSet = await addSet(exec, oldSe.id, 95, 5);
     await completeSet(exec, oldSet.id, Date.now());
@@ -96,7 +96,7 @@ describe('setRepo', () => {
     ]);
 
     // 当前训练
-    const nowSession = await createSession(exec, '这一次');
+    const nowSession = await createSession(exec, '这一次', null);
     const nowSe = await addExerciseToSession(exec, nowSession.id, exercise.id);
 
     const last = await getLastPerformance(exec, exercise.id, nowSession.id);
@@ -114,7 +114,7 @@ describe('setRepo', () => {
   it('getLastPerformance 只取最近的那一次训练，不混入更早的', async () => {
     const { exec, exercise } = await setup();
 
-    const older = await createSession(exec, '更早');
+    const older = await createSession(exec, '更早', null);
     const olderSe = await addExerciseToSession(exec, older.id, exercise.id);
     const olderSet = await addSet(exec, olderSe.id, 80, 5);
     await completeSet(exec, olderSet.id, Date.now());
@@ -123,7 +123,7 @@ describe('setRepo', () => {
       older.id,
     ]);
 
-    const recent = await createSession(exec, '最近');
+    const recent = await createSession(exec, '最近', null);
     const recentSe = await addExerciseToSession(exec, recent.id, exercise.id);
     const recentSet = await addSet(exec, recentSe.id, 95, 5);
     await completeSet(exec, recentSet.id, Date.now());
@@ -132,7 +132,7 @@ describe('setRepo', () => {
       recent.id,
     ]);
 
-    const now = await createSession(exec, '当前');
+    const now = await createSession(exec, '当前', null);
     await addExerciseToSession(exec, now.id, exercise.id);
 
     const last = await getLastPerformance(exec, exercise.id, now.id);

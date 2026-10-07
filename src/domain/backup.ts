@@ -301,6 +301,7 @@ function normalizeSession(raw: unknown, index: number): FieldResult<WorkoutSessi
       startedAt: startedAt.value,
       finishedAt: finishedAt.value,
       note: note.value,
+      templateId: null,
     },
   };
 }

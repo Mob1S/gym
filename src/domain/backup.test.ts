@@ -32,6 +32,7 @@ function makeSession(overrides: Partial<WorkoutSession> = {}): WorkoutSession {
     startedAt: EXPORTED_AT - 3_600_000,
     finishedAt: EXPORTED_AT - 1_800_000,
     note: null,
+    templateId: null,
     ...overrides,
   };
 }

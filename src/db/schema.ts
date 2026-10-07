@@ -91,3 +91,47 @@ CREATE TABLE IF NOT EXISTS app_setting (
   value TEXT NOT NULL
 );
 `;
+
+/**
+ * 分化计划（训练模板）与它下面的动作。
+ *
+ * 计划**只存动作清单与顺序**，刻意不存目标组数/重量/次数：目标是计划的一部分时，
+ * 用户每改一次计划都要维护几十个数字，而「上次练了多少」本机已经自动沿用了
+ * （`setRepo.getLastPerformance`），计划再写一份就是第二处真相，两处必然打架。
+ *
+ * `template_exercise.exercise_id` 的外键与 `session_exercise` 的同名外键**同向**，
+ * 所以备份导入的删除顺序里它排在 `exercise` 之前即可，不需要新的顺序推理。
+ */
+export const CREATE_TEMPLATE_SQL = `
+CREATE TABLE IF NOT EXISTS split_template (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  position   INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS template_exercise (
+  id          TEXT PRIMARY KEY,
+  template_id TEXT NOT NULL REFERENCES split_template(id) ON DELETE CASCADE,
+  exercise_id TEXT NOT NULL REFERENCES exercise(id),
+  position    INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_template_exercise_template
+  ON template_exercise(template_id);
+`;
+
+/**
+ * 训练属于哪一套计划。
+ *
+ * **刻意不写 `REFERENCES split_template(id)`**：`ALTER TABLE ... ADD COLUMN` 加上的
+ * 列级外键在 SQLite 里不会被后续写入强制（实测），写一个不生效的约束只会误导后来的人。
+ * 改为一条明文约定：**删计划时由 `templateRepo.deleteTemplate` 把引用它的
+ * `session.template_id` 置空**。
+ *
+ * 这一列的作用只有一个：让「今天该练哪一套」推得出来。若改成训练结束后拿动作清单
+ * 去反推是哪套计划，用户中途加/删一个动作就会反推失败或错配，而错配的表现是
+ * 「轮转莫名跳了一套」——用户看得见，又最难解释。
+ */
+export const ADD_SESSION_TEMPLATE_SQL =
+  'ALTER TABLE session ADD COLUMN template_id TEXT';

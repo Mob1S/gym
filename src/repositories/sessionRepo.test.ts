@@ -16,7 +16,7 @@ import { addSet, completeSet } from './setRepo';
 describe('sessionRepo', () => {
   it('新建的训练是进行中状态', async () => {
     const exec = await createMigratedExecutor();
-    const s = await createSession(exec, '腿部日');
+    const s = await createSession(exec, '腿部日', null);
     expect(s.name).toBe('腿部日');
     expect(s.finishedAt).toBeNull();
     expect(s.startedAt).toBeGreaterThan(0);
@@ -24,7 +24,7 @@ describe('sessionRepo', () => {
 
   it('查得到刚建好的训练', async () => {
     const exec = await createMigratedExecutor();
-    const s = await createSession(exec, null);
+    const s = await createSession(exec, null, null);
     const found = await getSession(exec, s.id);
     expect(found?.id).toBe(s.id);
     expect(found?.name).toBeNull();
@@ -32,32 +32,32 @@ describe('sessionRepo', () => {
 
   it('getActiveSession 返回未结束的那一次', async () => {
     const exec = await createMigratedExecutor();
-    const s = await createSession(exec, '腿部日');
+    const s = await createSession(exec, '腿部日', null);
     const active = await getActiveSession(exec);
     expect(active?.id).toBe(s.id);
   });
 
   it('训练结束后 getActiveSession 返回 null', async () => {
     const exec = await createMigratedExecutor();
-    const s = await createSession(exec, '腿部日');
+    const s = await createSession(exec, '腿部日', null);
     await finishSession(exec, s.id, Date.now());
     expect(await getActiveSession(exec)).toBeNull();
   });
 
   it('存在多条未结束记录时只返回最新的一条（模拟崩溃后残留）', async () => {
     const exec = await createMigratedExecutor();
-    await createSession(exec, '旧的一场');
+    await createSession(exec, '旧的一场', null);
     await new Promise((r) => setTimeout(r, 5));
-    const newer = await createSession(exec, '新的一场');
+    const newer = await createSession(exec, '新的一场', null);
     const active = await getActiveSession(exec);
     expect(active?.id).toBe(newer.id);
   });
 
   it('训练列表按开始时间倒序', async () => {
     const exec = await createMigratedExecutor();
-    const first = await createSession(exec, '第一场');
+    const first = await createSession(exec, '第一场', null);
     await new Promise((r) => setTimeout(r, 5));
-    const second = await createSession(exec, '第二场');
+    const second = await createSession(exec, '第二场', null);
     await finishSession(exec, first.id, Date.now());
     await finishSession(exec, second.id, Date.now());
     const list = await listSessions(exec, 10);
@@ -66,7 +66,7 @@ describe('sessionRepo', () => {
 
   it('往训练里加动作，position 从 0 开始递增', async () => {
     const exec = await createMigratedExecutor();
-    const s = await createSession(exec, '腿部日');
+    const s = await createSession(exec, '腿部日', null);
     const ex1 = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
     const ex2 = await createCustomExercise(exec, '腿举', '腿', '器械');
     const se1 = await addExerciseToSession(exec, s.id, ex1.id);
@@ -77,7 +77,7 @@ describe('sessionRepo', () => {
 
   it('按 position 列出训练中的动作', async () => {
     const exec = await createMigratedExecutor();
-    const s = await createSession(exec, '腿部日');
+    const s = await createSession(exec, '腿部日', null);
     const ex1 = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
     const ex2 = await createCustomExercise(exec, '腿举', '腿', '器械');
     await addExerciseToSession(exec, s.id, ex2.id);
@@ -89,7 +89,7 @@ describe('sessionRepo', () => {
   it('listSessions 尊重 limit', async () => {
     const exec = await createMigratedExecutor();
     for (let i = 0; i < 5; i++) {
-      const s = await createSession(exec, `第 ${i} 场`);
+      const s = await createSession(exec, `第 ${i} 场`, null);
       await finishSession(exec, s.id, Date.now());
     }
     expect((await listSessions(exec, 2)).length).toBe(2);
@@ -106,8 +106,8 @@ describe('sessionRepo', () => {
   const FORCED_TIE = 1_700_000_000_000;
 
   async function seedTiedSessions(exec: SqlExecutor) {
-    const first = await createSession(exec, '先建的');
-    const second = await createSession(exec, '后建的');
+    const first = await createSession(exec, '先建的', null);
+    const second = await createSession(exec, '后建的', null);
     await exec.run('UPDATE session SET started_at = ? WHERE id = ?', [
       FORCED_TIE,
       first.id,
@@ -140,7 +140,7 @@ describe('sessionRepo', () => {
 
   it('findLastActiveSessionExerciseId 取最近做过组的那个动作', async () => {
     const exec = await createMigratedExecutor();
-    const s = await createSession(exec, '腿部日');
+    const s = await createSession(exec, '腿部日', null);
     const ex1 = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
     const ex2 = await createCustomExercise(exec, '腿举', '腿', '器械');
     const se1 = await addExerciseToSession(exec, s.id, ex1.id);
@@ -156,7 +156,7 @@ describe('sessionRepo', () => {
 
   it('一组都没完成时返回 null', async () => {
     const exec = await createMigratedExecutor();
-    const s = await createSession(exec, '腿部日');
+    const s = await createSession(exec, '腿部日', null);
     const ex1 = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
     const se1 = await addExerciseToSession(exec, s.id, ex1.id);
     await addSet(exec, se1.id, 100, 5); // 建出来但没完成
@@ -168,12 +168,12 @@ describe('sessionRepo', () => {
     const exec = await createMigratedExecutor();
     const ex = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
 
-    const other = await createSession(exec, '别的一场');
+    const other = await createSession(exec, '别的一场', null);
     const seOther = await addExerciseToSession(exec, other.id, ex.id);
     const done = await addSet(exec, seOther.id, 100, 5);
     await completeSet(exec, done.id, 5_000);
 
-    const s = await createSession(exec, '这一场');
+    const s = await createSession(exec, '这一场', null);
     const se = await addExerciseToSession(exec, s.id, ex.id);
     await addSet(exec, se.id, 100, 5);
 

@@ -54,6 +54,7 @@ function makeData(overrides: Partial<BackupData> = {}): BackupData {
         startedAt: T0,
         finishedAt: T0 + 45 * MINUTE,
         note: null,
+        templateId: null,
       },
     ],
     sessionExercises: [
@@ -102,7 +103,7 @@ async function seedLibrary(exec: SqlExecutor): Promise<void> {
   const ancient = await createCustomExercise(exec, '上古动作', null, null);
   await exec.run('UPDATE exercise SET is_archived = 1 WHERE id = ?', [ancient.id]);
 
-  const push = await createSession(exec, '推日');
+  const push = await createSession(exec, '推日', null);
   await exec.run(
     'UPDATE session SET started_at = ?, finished_at = ?, note = ? WHERE id = ?',
     [T0, T0 + 50 * MINUTE, '状态不错', push.id],
@@ -121,7 +122,7 @@ async function seedLibrary(exec: SqlExecutor): Promise<void> {
   await addSet(exec, seSquat.id, 100, 5); // 未完成、没有休息记录
 
   // 进行中的训练：finished_at 为 NULL，也必须在备份里
-  const ongoing = await createSession(exec, '正在练');
+  const ongoing = await createSession(exec, '正在练', null);
   await exec.run('UPDATE session SET started_at = ? WHERE id = ?', [
     T0 + 90 * MINUTE,
     ongoing.id,
@@ -296,7 +297,7 @@ describe('importAll', () => {
 
     const target = await createMigratedExecutor();
     const staleExercise = await createCustomExercise(target, '目标库的旧动作', '背', null);
-    const staleSession = await createSession(target, '目标库的旧训练');
+    const staleSession = await createSession(target, '目标库的旧训练', null);
     const staleSe = await addExerciseToSession(target, staleSession.id, staleExercise.id);
     await addSet(target, staleSe.id, 999, 9);
 
@@ -443,9 +444,9 @@ describe('importAll', () => {
       buildBackup(
         makeData({
           sessions: [
-            { id: 'm-first', name: '先建', startedAt: T0, finishedAt: T0 + MINUTE, note: null },
-            { id: 'z-second', name: '中间', startedAt: T0, finishedAt: T0 + MINUTE, note: null },
-            { id: 'a-third', name: '后建', startedAt: T0, finishedAt: T0 + MINUTE, note: null },
+            { id: 'm-first', name: '先建', startedAt: T0, finishedAt: T0 + MINUTE, note: null, templateId: null },
+            { id: 'z-second', name: '中间', startedAt: T0, finishedAt: T0 + MINUTE, note: null, templateId: null },
+            { id: 'a-third', name: '后建', startedAt: T0, finishedAt: T0 + MINUTE, note: null, templateId: null },
           ],
           sessionExercises: [],
           sets: [],

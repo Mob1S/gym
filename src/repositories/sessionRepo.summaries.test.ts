@@ -18,7 +18,7 @@ async function makeFinishedSession(
   finishedAt: number,
   sets: { weight: number; reps: number; completed: boolean }[],
 ) {
-  const session = await createSession(exec, label);
+  const session = await createSession(exec, label, null);
   // createSession 用 Date.now() 写 started_at，这里覆写成测试指定值
   await exec.run('UPDATE session SET started_at = ? WHERE id = ?', [
     startedAt,
@@ -43,7 +43,7 @@ describe('listSessionSummaries', () => {
 
   it('进行中的训练不出现在历史里', async () => {
     const exec = await createMigratedExecutor();
-    await createSession(exec, '还没练完');
+    await createSession(exec, '还没练完', null);
     expect(await listSessionSummaries(exec, 10)).toEqual([]);
   });
 
@@ -78,7 +78,7 @@ describe('listSessionSummaries', () => {
 
   it('一个动作都没有的训练返回 0 组 0 容量，而不是被漏掉', async () => {
     const exec = await createMigratedExecutor();
-    const session = await createSession(exec, '空训练');
+    const session = await createSession(exec, '空训练', null);
     await finishSession(exec, session.id, Date.now());
 
     const rows = await listSessionSummaries(exec, 10);
@@ -119,7 +119,7 @@ describe('listSessionSummaries', () => {
   it('多个动作的容量会累加，不会因为 JOIN 翻倍', async () => {
     const exec = await createMigratedExecutor();
     const t0 = 1_700_000_000_000;
-    const session = await createSession(exec, '两个动作');
+    const session = await createSession(exec, '两个动作', null);
     await exec.run('UPDATE session SET started_at = ? WHERE id = ?', [t0, session.id]);
 
     for (const name of ['深蹲', '腿举']) {

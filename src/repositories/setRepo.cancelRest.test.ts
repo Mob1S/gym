@@ -11,7 +11,7 @@ import {
 
 async function setup() {
   const exec = await createMigratedExecutor();
-  const session = await createSession(exec, '腿部日');
+  const session = await createSession(exec, '腿部日', null);
   const exercise = await createCustomExercise(exec, '深蹲', '腿', '杠铃');
   const se = await addExerciseToSession(exec, session.id, exercise.id);
   return { exec, session, exercise, se };
