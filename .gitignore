@@ -26,6 +26,10 @@ Thumbs.db
 .env
 .env.local
 
+# 本机 npm 缓存。用户级缓存被指到了工作区外面（沙箱不让写），所以在仓库里
+# 临时建过一份；它有一次 122MB，不该进 git、也不该被 EAS 打包上传
+.npm-cache/
+
 # 编辑器 / AI 工具的**本机**配置。settings.local.json 里是这台机器的权限允许清单
 # （含本机路径），属于个人环境而非项目产物，不该共享
 .claude/settings.local.json
